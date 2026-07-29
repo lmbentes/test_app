@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Colheita de Água</title>
+
+<!-- PWA / iPhone "Add to Home Screen" -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0A4B47">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Colheita Água">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
 <style>
   :root{
     --bg:#F6F2EA;
@@ -269,17 +279,19 @@
 <input type="file" id="cameraInput" accept="image/*" capture="environment">
 
 <script>
-/* ---------------- Storage helpers ---------------- */
+/* ---------------- Storage helpers (localStorage — funciona offline, no telemóvel) ---------------- */
 async function safeGet(key){
-  try{ const r = await window.storage.get(key,false); return r ? JSON.parse(r.value) : null; }
-  catch(e){ return null; }
+  try{
+    const raw = localStorage.getItem(key);
+    return raw !== null ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
 }
 async function safeSet(key,value){
-  try{ await window.storage.set(key, JSON.stringify(value), false); return true; }
+  try{ localStorage.setItem(key, JSON.stringify(value)); return true; }
   catch(e){ console.error('storage set failed',key,e); return false; }
 }
 async function safeDelete(key){
-  try{ await window.storage.delete(key,false); }catch(e){ /* key may not exist */ }
+  try{ localStorage.removeItem(key); }catch(e){ /* key may not exist */ }
 }
 
 async function loadLocations(){ return (await safeGet('locations')) || []; }
@@ -407,13 +419,18 @@ async function renderList(){
   headerSub.textContent = 'registo de amostragem';
 
   const locations = await loadLocations();
+  const footer = `<div class="footer-tools">
+      <button id="settingsBtn">⚙️ Definições</button>
+      ${locations.length ? '<span> · </span><button id="resetBtn">Repor todos os dados</button>' : ''}
+    </div>`;
   if(!locations.length){
     app.innerHTML = `
       <div class="empty-state">
         ${waveBigSvg()}
         <p><strong>Ainda não há locais registados.</strong></p>
         <p>Toca em “+” para criar o primeiro local de colheita.</p>
-      </div>`;
+      </div>
+      ${footer}`;
   } else {
     // sort most recent first
     const sorted = [...locations].sort((a,b)=> b.timestamp - a.timestamp);
@@ -434,7 +451,7 @@ async function renderList(){
           <div class="chev">›</div>
         </div>`;
     }
-    html += `<div class="footer-tools"><button id="resetBtn">Repor todos os dados</button></div>`;
+    html += footer;
     app.innerHTML = html;
     app.querySelectorAll('.loc-card').forEach(card=>{
       card.addEventListener('click', ()=> renderLocationDetail(card.dataset.id));
@@ -442,6 +459,8 @@ async function renderList(){
     const resetBtn = document.getElementById('resetBtn');
     if(resetBtn) resetBtn.addEventListener('click', resetAllData);
   }
+  const settingsBtn = document.getElementById('settingsBtn');
+  if(settingsBtn) settingsBtn.addEventListener('click', renderSettings);
 
   ensureFab();
 }
@@ -766,14 +785,20 @@ async function startAddFrasco(locId, skipCamera){
 
   let extracted = null;
   let ocrAttempted = false;
+  let noApiKey = false;
 
   if(!skipCamera){
     const photo = await openCamera(1000, 0.75);
     if(!photo) return;
     ocrAttempted = true;
-    showOcrLoading();
-    extracted = await extractFrascoFields(photo);
-    hideOcrLoading();
+    const apiKey = getApiKey();
+    if(!apiKey){
+      noApiKey = true;
+    } else {
+      showOcrLoading();
+      extracted = await extractFrascoFields(photo, apiKey);
+      hideOcrLoading();
+    }
   }
 
   showFrascoSheet(locId, {
@@ -782,7 +807,7 @@ async function startAddFrasco(locId, skipCamera){
     suggestedAmostra: (extracted && extracted.amostra) || suggestedAmostra,
     suggestedParam: (extracted && extracted.frasco) || '',
     params, destinos,
-    ocrAttempted, ocrFailed: ocrAttempted && !extracted
+    ocrAttempted, ocrFailed: ocrAttempted && !extracted, noApiKey
   });
 }
 
@@ -802,7 +827,16 @@ function hideOcrLoading(){
   if(el) el.remove();
 }
 
-async function extractFrascoFields(dataUrl){
+function getApiKey(){
+  try{ return (localStorage.getItem('anthropic-api-key') || '').trim(); }
+  catch(e){ return ''; }
+}
+function setApiKey(key){
+  try{ localStorage.setItem('anthropic-api-key', key.trim()); return true; }
+  catch(e){ return false; }
+}
+
+async function extractFrascoFields(dataUrl, apiKey){
   const match = dataUrl.match(/^data:(image\/\w+);base64,(.*)$/);
   if(!match) return null;
   const mediaType = match[1];
@@ -811,7 +845,12 @@ async function extractFrascoFields(dataUrl){
   try{
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: 300,
@@ -824,6 +863,7 @@ async function extractFrascoFields(dataUrl){
         ]
       })
     });
+    if(!response.ok) return null;
     const data = await response.json();
     const textBlock = (data.content || []).find(b => b.type === 'text');
     if(!textBlock) return null;
@@ -852,17 +892,19 @@ function wireChipRow(root, containerId, inputEl){
 }
 
 function showFrascoSheet(locId, opts){
-  const { suggestedNumero, suggestedDestino, suggestedAmostra, suggestedParam, params, destinos, ocrAttempted, ocrFailed } = opts;
+  const { suggestedNumero, suggestedDestino, suggestedAmostra, suggestedParam, params, destinos, ocrAttempted, ocrFailed, noApiKey } = opts;
   const backdrop = document.createElement('div');
   backdrop.className = 'sheet-backdrop';
   backdrop.innerHTML = `
     <div class="sheet">
       <h3>Novo frasco</h3>
       ${ocrAttempted ? `
-        <div class="ocr-note ${ocrFailed ? 'ocr-note-warn' : ''}">
-          ${ocrFailed
-            ? 'Não consegui ler a etiqueta automaticamente. Preenche os campos abaixo.'
-            : 'Campos lidos da etiqueta — confirma ou corrige antes de guardar.'}
+        <div class="ocr-note ${(ocrFailed || noApiKey) ? 'ocr-note-warn' : ''}">
+          ${noApiKey
+            ? 'Sem chave API configurada — a leitura automática está desativada. Define uma em Definições, ou preenche os campos abaixo.'
+            : (ocrFailed
+              ? 'Não consegui ler a etiqueta automaticamente. Preenche os campos abaixo.'
+              : 'Campos lidos da etiqueta — confirma ou corrige antes de guardar.')}
           <button class="ocr-retry" id="rereadBtn">🔁 Reler etiqueta</button>
         </div>` : ''}
 
@@ -901,8 +943,17 @@ function showFrascoSheet(locId, opts){
       const photo = await openCamera(1000, 0.75);
       if(!photo) return;
       backdrop.remove();
+      const apiKey = getApiKey();
+      if(!apiKey){
+        showFrascoSheet(locId, {
+          suggestedNumero: numInput.value, suggestedDestino: destinoInput.value,
+          suggestedAmostra: amostraInput.value, suggestedParam: paramInput.value,
+          params, destinos, ocrAttempted: true, noApiKey: true
+        });
+        return;
+      }
       showOcrLoading();
-      const extracted = await extractFrascoFields(photo);
+      const extracted = await extractFrascoFields(photo, apiKey);
       hideOcrLoading();
       showFrascoSheet(locId, {
         suggestedNumero: (extracted && extracted.numero) || numInput.value,
@@ -943,6 +994,44 @@ async function resetAllData(){
   renderList();
 }
 
+/* ---------- Settings ---------- */
+function renderSettings(){
+  view = 'settings';
+  removeAddFrascoBar();
+  backBtn.style.visibility = 'visible';
+  headerTitle.textContent = 'Definições';
+  headerSub.textContent = 'leitura automática de etiquetas';
+  ensureFab();
+
+  const currentKey = getApiKey();
+
+  app.innerHTML = `
+    <label class="field-label" style="margin-top:0;">Chave API da Anthropic</label>
+    <input type="text" id="apiKeyInput" placeholder="sk-ant-..." value="${esc(currentKey)}" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin-top:8px;">
+      Usada apenas neste telemóvel para pedir à IA que leia os campos das etiquetas dos frascos a partir da foto.
+      Sem chave, essa função fica desligada, mas o resto da app funciona normalmente.
+      Podes criar uma chave gratuita em <strong>console.anthropic.com</strong> (secção "API Keys").
+      A chave fica guardada apenas neste dispositivo.
+    </p>
+    <button class="btn-primary" id="saveKeyBtn">Guardar chave</button>
+    ${currentKey ? `<button class="btn-secondary" id="clearKeyBtn">Remover chave guardada</button>` : ''}
+  `;
+
+  document.getElementById('saveKeyBtn').addEventListener('click', ()=>{
+    const val = document.getElementById('apiKeyInput').value.trim();
+    setApiKey(val);
+    renderList();
+  });
+  const clearBtn = document.getElementById('clearKeyBtn');
+  if(clearBtn){
+    clearBtn.addEventListener('click', ()=>{
+      setApiKey('');
+      renderSettings();
+    });
+  }
+}
+
 /* patch renderList/renderLocationDetail transitions to manage add-frasco bar */
 const _origRenderList = renderList;
 renderList = async function(){ removeAddFrascoBar(); await _origRenderList(); };
@@ -951,6 +1040,12 @@ renderNewLocationForm = function(){ removeAddFrascoBar(); _origRenderNewLocation
 
 /* ---------------- Init ---------------- */
 renderList();
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('./sw.js').catch(()=>{ /* offline caching indisponível */ });
+  });
+}
 </script>
 </body>
 </html>
