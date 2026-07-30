@@ -158,6 +158,19 @@
     background:none;border:1.5px solid var(--coral);color:var(--coral);border-radius:10px;
     padding:9px 14px;font-size:13px;font-weight:650;cursor:pointer;
   }
+  .btn-outline{
+    background:none;border:1.5px solid var(--teal);color:var(--teal-dark);border-radius:10px;
+    padding:9px 14px;font-size:13px;font-weight:650;cursor:pointer;
+  }
+  .status-badge{
+    display:inline-flex;align-items:center;padding:5px 10px;border-radius:20px;font-size:12px;font-weight:650;white-space:nowrap;
+  }
+  .status-open{background:var(--foam);color:var(--teal-dark);}
+  .status-closed{background:#E9E4D8;color:#6B6252;}
+  .hero-no-photo{
+    border:1.5px dashed #B9C9C5;border-radius:12px;padding:22px 14px;text-align:center;
+    color:var(--ink-soft);font-size:13px;margin-bottom:12px;
+  }
 
   /* Location detail */
   .detail-hero{
@@ -235,7 +248,7 @@
   .gps-link-row{margin-top:2px;}
   .gps-link{color:var(--teal-dark);font-weight:650;text-decoration:none;border-bottom:1.5px solid var(--foam-line);}
 
-  .top-actions{display:flex;justify-content:flex-end;margin-bottom:2px;}
+  .top-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
 
   .spinner{
     width:34px;height:34px;border-radius:50%;margin:0 auto;
@@ -438,12 +451,14 @@ async function renderList(){
     for(const loc of sorted){
       const frascos = await loadFrascos(loc.id);
       const tide = TIDES[loc.mare] || null;
+      const isClosed = loc.estado === 'fechado';
       html += `
         <div class="loc-card" data-id="${loc.id}">
           ${loc.foto ? `<img class="loc-thumb" src="${loc.foto}">` : `<div class="loc-thumb placeholder">📍</div>`}
           <div class="loc-info">
             <div class="name">${esc(loc.nome)}</div>
             <div class="loc-meta">
+              ${isClosed ? `<span class="status-badge status-closed">🔒 Fechado</span>` : ''}
               ${tide ? `<span class="tide-badge ${tide.cls}">${tide.wave}${tide.label}</span>` : ''}
               <span class="frasco-count">${frascos.length} frasco${frascos.length===1?'':'s'}</span>
             </div>
@@ -487,48 +502,45 @@ function ensureFab(){
 }
 
 /* ---------- New location form ---------- */
-async function renderNewLocationForm(){
-  view = 'newLocation';
-  pendingNewLocationPhoto = null;
-  pendingGps = null;
-  selectedTide = null;
+async function renderLocationForm(existingLoc){
+  view = existingLoc ? 'editLocation' : 'newLocation';
+  pendingNewLocationPhoto = existingLoc ? (existingLoc.foto || null) : null;
+  pendingGps = existingLoc ? (existingLoc.gps || null) : null;
+  selectedTide = existingLoc ? (existingLoc.mare || null) : null;
   backBtn.style.visibility = 'visible';
-  headerTitle.textContent = 'Novo local';
+  headerTitle.textContent = existingLoc ? 'Editar local' : 'Novo local';
   headerSub.textContent = 'preia-mar, baixa-mar…';
   ensureFab();
 
   const names = await loadLocationNames();
+  const nomeIsKnown = existingLoc && names.some(n => n.trim().toLowerCase() === existingLoc.nome.trim().toLowerCase());
 
   app.innerHTML = `
-    <label class="field-label">Local</label>
+    <label class="field-label" style="margin-top:0;">Local</label>
     <div class="name-chips" id="nameChips">
-      ${names.map(n => `<div class="name-chip" data-name="${esc(n)}">${esc(n)}</div>`).join('')}
+      ${names.map(n => `<div class="name-chip${existingLoc && n===existingLoc.nome ? ' selected':''}" data-name="${esc(n)}">${esc(n)}</div>`).join('')}
       <div class="name-chip add-new" id="addNewChip">+ Novo local</div>
     </div>
-    <input type="text" id="locNome" placeholder="Nome do local" style="display:none;">
+    <input type="text" id="locNome" placeholder="Nome do local" value="${existingLoc ? esc(existingLoc.nome) : ''}" style="display:${existingLoc && !nomeIsKnown ? 'block' : 'none'};">
 
     <label class="field-label">Maré</label>
     <div class="tide-options" id="tideOptions">
       ${Object.entries(TIDES).map(([key,t])=>`
-        <div class="tide-option" data-key="${key}">${t.wave}${t.label}</div>
+        <div class="tide-option${existingLoc && existingLoc.mare===key ? ' selected':''}" data-key="${key}">${t.wave}${t.label}</div>
       `).join('')}
     </div>
 
     <label class="field-label">Foto do local</label>
-    <div id="photoArea">
-      <button class="photo-btn" id="takePhotoBtn">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="13" r="3.4" stroke="currentColor" stroke-width="1.6"/></svg>
-        Tirar foto do local
-      </button>
-    </div>
+    <div id="photoArea"></div>
 
     <label class="field-label">Posição GPS</label>
     <div id="gpsArea"></div>
 
-    <button class="btn-primary" id="saveLocBtn">Guardar local</button>
+    <button class="btn-primary" id="saveLocBtn">${existingLoc ? 'Guardar alterações' : 'Guardar local'}</button>
     <button class="btn-secondary" id="cancelLocBtn">Cancelar</button>
   `;
 
+  renderPhotoArea();
   renderGpsSection();
 
   const locNomeInput = document.getElementById('locNome');
@@ -556,23 +568,9 @@ async function renderNewLocationForm(){
     });
   });
 
-  document.getElementById('takePhotoBtn').addEventListener('click', async ()=>{
-    const dataUrl = await openCamera(700, 0.6);
-    if(dataUrl){
-      pendingNewLocationPhoto = dataUrl;
-      document.getElementById('photoArea').innerHTML = `
-        <div class="photo-preview-wrap">
-          <img class="photo-preview" src="${dataUrl}">
-          <button class="retake" id="retakeBtn">Repetir foto</button>
-        </div>`;
-      document.getElementById('retakeBtn').addEventListener('click', async ()=>{
-        const d2 = await openCamera(700,0.6);
-        if(d2){ pendingNewLocationPhoto = d2; document.querySelector('#photoArea img').src = d2; }
-      });
-    }
+  document.getElementById('cancelLocBtn').addEventListener('click', ()=>{
+    existingLoc ? renderLocationDetail(existingLoc.id) : renderList();
   });
-
-  document.getElementById('cancelLocBtn').addEventListener('click', renderList);
 
   document.getElementById('saveLocBtn').addEventListener('click', async ()=>{
     const nome = document.getElementById('locNome').value.trim();
@@ -580,20 +578,71 @@ async function renderNewLocationForm(){
     const btn = document.getElementById('saveLocBtn');
     btn.disabled = true; btn.textContent = 'A guardar…';
     const locations = await loadLocations();
-    const newLoc = {
-      id: uid(),
-      nome,
-      mare: selectedTide,
-      foto: pendingNewLocationPhoto,
-      gps: pendingGps,
-      timestamp: Date.now()
-    };
-    locations.push(newLoc);
-    await saveLocations(locations);
-    await saveFrascos(newLoc.id, []);
     await addLocationName(nome);
-    renderLocationDetail(newLoc.id);
+
+    if(existingLoc){
+      const idx = locations.findIndex(l => l.id === existingLoc.id);
+      if(idx >= 0){
+        locations[idx] = {
+          ...locations[idx],
+          nome, mare: selectedTide,
+          foto: pendingNewLocationPhoto,
+          gps: pendingGps
+        };
+        await saveLocations(locations);
+      }
+      renderLocationDetail(existingLoc.id);
+    } else {
+      const newLoc = {
+        id: uid(),
+        nome,
+        mare: selectedTide,
+        foto: pendingNewLocationPhoto,
+        gps: pendingGps,
+        estado: 'aberto',
+        timestamp: Date.now()
+      };
+      locations.push(newLoc);
+      await saveLocations(locations);
+      await saveFrascos(newLoc.id, []);
+      renderLocationDetail(newLoc.id);
+    }
   });
+}
+function renderNewLocationForm(){ renderLocationForm(null); }
+async function renderEditLocationForm(locId){
+  const locations = await loadLocations();
+  const loc = locations.find(l => l.id === locId);
+  if(!loc) return;
+  renderLocationForm(loc);
+}
+
+/* ---------- Photo capture (local) ---------- */
+function renderPhotoArea(){
+  const area = document.getElementById('photoArea');
+  if(!area) return;
+  if(pendingNewLocationPhoto){
+    area.innerHTML = `
+      <div class="photo-preview-wrap">
+        <img class="photo-preview" src="${pendingNewLocationPhoto}">
+        <button class="retake" id="retakeBtn">Repetir foto</button>
+      </div>`;
+    document.getElementById('retakeBtn').addEventListener('click', capturePhoto);
+  } else {
+    area.innerHTML = `
+      <button class="photo-btn" id="takePhotoBtn">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="13" r="3.4" stroke="currentColor" stroke-width="1.6"/></svg>
+        Tirar foto do local
+      </button>`;
+    document.getElementById('takePhotoBtn').addEventListener('click', capturePhoto);
+  }
+}
+async function capturePhoto(){
+  const dataUrl = await openCamera(700, 0.6);
+  if(dataUrl){
+    pendingNewLocationPhoto = dataUrl;
+    renderPhotoArea();
+  }
 }
 
 /* ---------- GPS capture ---------- */
@@ -659,19 +708,27 @@ async function renderLocationDetail(locId){
 
   const frascos = await loadFrascos(locId);
   const tide = TIDES[loc.mare] || null;
+  const isClosed = loc.estado === 'fechado';
 
   let html = `
     <div class="top-actions">
-      <button class="btn-danger-outline" id="delLocBtn">Eliminar local</button>
+      <button class="btn-outline" id="editLocBtn">Editar</button>
+      <button class="btn-outline" id="toggleStatusBtn">${isClosed ? 'Reabrir local' : 'Fechar local'}</button>
+      <button class="btn-danger-outline" id="delLocBtn">Eliminar</button>
     </div>
     <div class="detail-hero">
-      ${loc.foto ? `<img src="${loc.foto}">` : ''}
+      ${loc.foto ? `<img src="${loc.foto}">` : `<div class="hero-no-photo">Sem foto do local ainda — toca em "Editar" para adicionar.</div>`}
       <div class="detail-hero-top">
         <div class="name">${esc(loc.nome)}</div>
-        ${tide ? `<span class="tide-badge ${tide.cls}">${tide.wave}${tide.label}</span>` : ''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+          <span class="status-badge ${isClosed ? 'status-closed' : 'status-open'}">${isClosed ? '🔒 Fechado' : '🟢 Em curso'}</span>
+          ${tide ? `<span class="tide-badge ${tide.cls}">${tide.wave}${tide.label}</span>` : ''}
+        </div>
       </div>
       <div class="timestamp">Registado em ${fmtTime(loc.timestamp)}</div>
-      ${loc.gps ? `<div class="timestamp gps-link-row">📍 <a class="gps-link" href="https://www.google.com/maps?q=${loc.gps.lat},${loc.gps.lng}" target="_blank" rel="noopener">${loc.gps.lat.toFixed(5)}, ${loc.gps.lng.toFixed(5)}</a></div>` : ''}
+      ${loc.gps
+        ? `<div class="timestamp gps-link-row">📍 <a class="gps-link" href="https://www.google.com/maps?q=${loc.gps.lat},${loc.gps.lng}" target="_blank" rel="noopener">${loc.gps.lat.toFixed(5)}, ${loc.gps.lng.toFixed(5)}</a></div>`
+        : `<div class="timestamp gps-link-row">📍 Sem posição GPS ainda — toca em "Editar" para a adicionar no local.</div>`}
     </div>
 
     <div class="section-title">
@@ -720,6 +777,17 @@ async function renderLocationDetail(locId){
   `;
   app.innerHTML = html;
 
+  document.getElementById('editLocBtn').addEventListener('click', ()=> renderEditLocationForm(locId));
+
+  document.getElementById('toggleStatusBtn').addEventListener('click', async ()=>{
+    const all = await loadLocations();
+    const idx = all.findIndex(l => l.id === locId);
+    if(idx < 0) return;
+    all[idx].estado = isClosed ? 'aberto' : 'fechado';
+    await saveLocations(all);
+    renderLocationDetail(locId);
+  });
+
   document.getElementById('delLocBtn').addEventListener('click', async ()=>{
     if(!confirm(`Eliminar "${loc.nome}" e todos os frascos associados? Esta ação não pode ser desfeita.`)) return;
     const updated = locations.filter(l => l.id !== locId);
@@ -739,7 +807,11 @@ async function renderLocationDetail(locId){
     });
   });
 
-  renderAddFrascoBar(locId, frascos);
+  if(isClosed){
+    removeAddFrascoBar();
+  } else {
+    renderAddFrascoBar(locId, frascos);
+  }
 }
 
 function renderAddFrascoBar(locId, frascos){
