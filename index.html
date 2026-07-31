@@ -340,6 +340,9 @@
 
 <input type="file" id="cameraInput" accept="image/*" capture="environment">
 
+<!-- OCR local e gratuito (leitura de etiquetas sem chave API) -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+
 <script>
 /* ---------------- Storage helpers (localStorage — funciona offline, no telemóvel) ---------------- */
 async function safeGet(key){
@@ -1081,20 +1084,23 @@ async function startAddFrasco(locId, skipCamera){
 
   let extracted = null;
   let ocrAttempted = false;
-  let noApiKey = false;
+  let ocrEngine = null;
 
   if(!skipCamera){
-    const photo = await openCamera(1000, 0.75);
+    const photo = await openCamera(1300, 0.82);
     if(!photo) return;
     ocrAttempted = true;
     const apiKey = getApiKey();
-    if(!apiKey){
-      noApiKey = true;
-    } else {
-      showOcrLoading();
+    if(apiKey){
+      ocrEngine = 'ia';
+      showOcrLoading('A consultar a IA…');
       extracted = await extractFrascoFields(photo, apiKey);
-      hideOcrLoading();
+    } else {
+      ocrEngine = 'local';
+      showOcrLoading('A ler a etiqueta no telemóvel (pode demorar alguns segundos)…');
+      extracted = await extractFrascoFieldsLocalOCR(photo);
     }
+    hideOcrLoading();
   }
 
   showFrascoSheet(locId, {
@@ -1103,18 +1109,18 @@ async function startAddFrasco(locId, skipCamera){
     suggestedAmostra: (extracted && extracted.amostra) || suggestedAmostra,
     suggestedParam: (extracted && extracted.frasco) || '',
     params, destinos,
-    ocrAttempted, ocrFailed: ocrAttempted && !extracted, noApiKey
+    ocrAttempted, ocrFailed: ocrAttempted && !extracted, ocrEngine
   });
 }
 
-function showOcrLoading(){
+function showOcrLoading(message){
   const el = document.createElement('div');
   el.className = 'sheet-backdrop';
   el.id = 'ocrLoading';
   el.innerHTML = `
     <div class="sheet" style="text-align:center;padding-top:30px;padding-bottom:30px;">
       <div class="spinner"></div>
-      <p style="margin-top:14px;color:var(--ink-soft);font-size:14.5px;">A ler a etiqueta…</p>
+      <p style="margin-top:14px;color:var(--ink-soft);font-size:14.5px;">${esc(message || 'A ler a etiqueta…')}</p>
     </div>`;
   document.body.appendChild(el);
 }
@@ -1137,7 +1143,7 @@ async function extractFrascoFields(dataUrl, apiKey){
   if(!match) return null;
   const mediaType = match[1];
   const base64Data = match[2];
-  const systemPrompt = 'Vais receber uma foto da etiqueta de um frasco de amostragem de água. Extrai estes campos, se estiverem visíveis: "frasco" (o parâmetro a analisar, ex.: Cloretos, pH, Metais), "numero" (o número ou código do frasco), "destino" (o laboratório ou entidade de destino), "amostra" (o número da amostra). Responde APENAS com um objeto JSON válido com essas quatro chaves, todas strings (usa "" se não conseguires ler algum campo). Não incluas texto antes ou depois do JSON, nem blocos de código.';
+  const systemPrompt = 'Vais receber uma foto da etiqueta de um frasco de amostragem de água. As etiquetas costumam ter uma linha de tabela com os campos "Frasco:" (tipo/parâmetro do frasco), "n°:" (número do frasco) e "Destino:" (laboratório de destino), e um campo separado "N° amostra:" (número da amostra, geralmente maior, no topo). Extrai estes quatro valores: "frasco", "numero", "destino", "amostra". Responde APENAS com um objeto JSON válido com essas quatro chaves, todas strings (usa "" se não conseguires ler algum campo). Não incluas texto antes ou depois do JSON, nem blocos de código.';
   try{
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1172,6 +1178,56 @@ async function extractFrascoFields(dataUrl, apiKey){
   }
 }
 
+/* ---------- Leitura local e gratuita (OCR no telemóvel, sem chave API) ---------- */
+async function extractFrascoFieldsLocalOCR(dataUrl){
+  if(typeof Tesseract === 'undefined'){
+    console.error('Tesseract.js não carregou (sem ligação à internet?).');
+    return null;
+  }
+  try{
+    const result = await Tesseract.recognize(dataUrl, 'por');
+    const text = (result && result.data && result.data.text) || '';
+    return parseAguasAlgarveLabel(text);
+  }catch(e){
+    console.error('OCR local falhou', e);
+    return null;
+  }
+}
+
+/* Interpreta o texto lido pelo OCR, ajustado ao modelo de etiqueta
+   "Águas do Algarve": uma linha de tabela com "Frasco: ... n°: ... Destino: ..."
+   e um campo separado "N° amostra: ..." — mas com fallback campo a campo
+   caso a linha completa não seja reconhecida de uma vez. */
+function parseAguasAlgarveLabel(text){
+  const norm = text.replace(/\s+/g, ' ').trim();
+  if(!norm) return null;
+  const out = { frasco: '', numero: '', destino: '', amostra: '' };
+
+  const amostraMatch = norm.match(/N[°ºo]?\s*amostra[:\s]*([0-9]{4,})/i);
+  if(amostraMatch) out.amostra = amostraMatch[1];
+
+  // tenta a linha completa da tabela de uma vez (mais fiável quando resulta)
+  const rowMatch = norm.match(/Frasco[:\s]*([\s\S]*?)\s*n[°ºo][:\s]*([0-9]+)\s*Destino[:\s]*([^\n]+?)(?=\s*Obs\b|$)/i);
+  if(rowMatch){
+    out.frasco = rowMatch[1].trim();
+    out.numero = rowMatch[2].trim();
+    out.destino = rowMatch[3].trim();
+  } else {
+    const frascoMatch = norm.match(/Frasco[:\s]*([^\n]+?)(?=\s*n[°ºo][:\s]|$)/i);
+    if(frascoMatch) out.frasco = frascoMatch[1].trim();
+    const numeroMatch = norm.match(/\bn[°ºo][:\s]*([0-9]+)\b/i);
+    if(numeroMatch) out.numero = numeroMatch[1].trim();
+    const destinoMatch = norm.match(/Destino[:\s]*([^\n]+?)(?=\s*Obs\b|$)/i);
+    if(destinoMatch) out.destino = destinoMatch[1].trim();
+  }
+
+  // limpar sobras comuns de OCR ruidoso no fim do destino (ex.: apanhar "Obs" a mais)
+  out.destino = out.destino.replace(/\s*Obs.*$/i, '').trim();
+
+  const hasAny = out.frasco || out.numero || out.destino || out.amostra;
+  return hasAny ? out : null;
+}
+
 function chipsRow(id, values){
   if(!values.length) return `<div class="name-chips" id="${id}"></div>`;
   return `<div class="name-chips" id="${id}">
@@ -1188,19 +1244,19 @@ function wireChipRow(root, containerId, inputEl){
 }
 
 function showFrascoSheet(locId, opts){
-  const { suggestedNumero, suggestedDestino, suggestedAmostra, suggestedParam, params, destinos, ocrAttempted, ocrFailed, noApiKey } = opts;
+  const { suggestedNumero, suggestedDestino, suggestedAmostra, suggestedParam, params, destinos, ocrAttempted, ocrFailed, ocrEngine } = opts;
   const backdrop = document.createElement('div');
   backdrop.className = 'sheet-backdrop';
   backdrop.innerHTML = `
     <div class="sheet">
       <h3>Novo frasco</h3>
       ${ocrAttempted ? `
-        <div class="ocr-note ${(ocrFailed || noApiKey) ? 'ocr-note-warn' : ''}">
-          ${noApiKey
-            ? 'Sem chave API configurada — a leitura automática está desativada. Define uma em Definições, ou preenche os campos abaixo.'
-            : (ocrFailed
-              ? 'Não consegui ler a etiqueta automaticamente. Preenche os campos abaixo.'
-              : 'Campos lidos da etiqueta — confirma ou corrige antes de guardar.')}
+        <div class="ocr-note ${ocrFailed ? 'ocr-note-warn' : ''}">
+          ${ocrFailed
+            ? 'Não consegui ler a etiqueta automaticamente. Preenche os campos abaixo.'
+            : (ocrEngine === 'local'
+              ? 'Campos lidos localmente no telemóvel (OCR grátis) — confirma ou corrige antes de guardar.'
+              : 'Campos lidos pela IA — confirma ou corrige antes de guardar.')}
           <button class="ocr-retry" id="rereadBtn">🔁 Reler etiqueta</button>
         </div>` : ''}
 
@@ -1236,27 +1292,27 @@ function showFrascoSheet(locId, opts){
   const rereadBtn = backdrop.querySelector('#rereadBtn');
   if(rereadBtn){
     rereadBtn.addEventListener('click', async ()=>{
-      const photo = await openCamera(1000, 0.75);
+      const photo = await openCamera(1300, 0.82);
       if(!photo) return;
       backdrop.remove();
       const apiKey = getApiKey();
-      if(!apiKey){
-        showFrascoSheet(locId, {
-          suggestedNumero: numInput.value, suggestedDestino: destinoInput.value,
-          suggestedAmostra: amostraInput.value, suggestedParam: paramInput.value,
-          params, destinos, ocrAttempted: true, noApiKey: true
-        });
-        return;
+      let extracted, ocrEngine;
+      if(apiKey){
+        ocrEngine = 'ia';
+        showOcrLoading('A consultar a IA…');
+        extracted = await extractFrascoFields(photo, apiKey);
+      } else {
+        ocrEngine = 'local';
+        showOcrLoading('A ler a etiqueta no telemóvel (pode demorar alguns segundos)…');
+        extracted = await extractFrascoFieldsLocalOCR(photo);
       }
-      showOcrLoading();
-      const extracted = await extractFrascoFields(photo, apiKey);
       hideOcrLoading();
       showFrascoSheet(locId, {
         suggestedNumero: (extracted && extracted.numero) || numInput.value,
         suggestedDestino: (extracted && extracted.destino) || destinoInput.value,
         suggestedAmostra: (extracted && extracted.amostra) || amostraInput.value,
         suggestedParam: (extracted && extracted.frasco) || paramInput.value,
-        params, destinos, ocrAttempted: true, ocrFailed: !extracted
+        params, destinos, ocrAttempted: true, ocrFailed: !extracted, ocrEngine
       });
     });
   }
@@ -1312,12 +1368,16 @@ function renderSettings(){
     <button class="btn-secondary" id="importBtn">📥 Importar cópia</button>
     <input type="file" id="importFileInput" accept="application/json,.json" style="display:none;">
 
-    <label class="field-label">Chave API da Anthropic</label>
-    <input type="text" id="apiKeyInput" placeholder="sk-ant-..." value="${esc(currentKey)}" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <label class="field-label">Leitura automática de etiquetas</label>
+    <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin-top:0;">
+      Por omissão, a app lê as etiquetas com OCR local (Tesseract), <strong>grátis e sem chave</strong> —
+      corre no telemóvel, mas é menos preciso com letra manuscrita ou fotos de má qualidade.
+      Se quiseres leitura mais fiável (usa IA), define uma chave da Anthropic abaixo — nesse caso,
+      cada leitura consome créditos da tua conta.
+    </p>
+    <input type="text" id="apiKeyInput" placeholder="sk-ant-... (opcional)" value="${esc(currentKey)}" autocapitalize="off" autocorrect="off" spellcheck="false">
     <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin-top:8px;">
-      Usada apenas neste telemóvel para pedir à IA que leia os campos das etiquetas dos frascos a partir da foto.
-      Sem chave, essa função fica desligada, mas o resto da app funciona normalmente.
-      Podes criar uma chave gratuita em <strong>console.anthropic.com</strong> (secção "API Keys").
+      Podes criar uma chave em <strong>console.anthropic.com</strong> (secção "API Keys").
       A chave fica guardada apenas neste dispositivo.
     </p>
     <button class="btn-primary" id="saveKeyBtn">Guardar chave</button>
