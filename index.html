@@ -172,6 +172,41 @@
     color:var(--ink-soft);font-size:13px;margin-bottom:12px;
   }
 
+  .stage-title{
+    display:flex;align-items:center;gap:10px;font-size:14px;font-weight:700;color:var(--teal-dark);
+    margin:0 0 14px 0;padding-bottom:9px;border-bottom:2px solid var(--foam-line);
+  }
+  .stage-num{
+    width:22px;height:22px;border-radius:50%;background:var(--teal);color:#fff;font-size:12px;
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;font-weight:700;
+  }
+
+  .progress-row{
+    display:flex;align-items:center;gap:10px;margin-top:10px;
+    background:var(--surface);border-radius:12px;padding:10px 12px;
+    box-shadow:0 1px 3px rgba(20,50,45,0.08);border:1px solid rgba(20,50,45,0.06);
+  }
+  .progress-text{font-size:12px;color:var(--ink-soft);white-space:nowrap;}
+  .progress-bar-track{flex:1;height:6px;border-radius:4px;background:#EFEAE0;overflow:hidden;}
+  .progress-bar-fill{height:100%;background:var(--teal);border-radius:4px;}
+
+  .frasco-check{
+    width:26px;height:26px;border-radius:7px;border:1.5px solid #C7BFAE;background:#fff;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;font-weight:700;
+  }
+  .frasco-check.checked{background:var(--teal);border-color:var(--teal);}
+
+  .photo-slots{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .photo-slots .photo-btn{padding:16px 6px;font-size:12px;gap:6px;}
+  .photo-slots .photo-btn svg{width:22px;height:22px;}
+  .photo-slots .photo-preview-wrap img{width:100%;height:104px;object-fit:cover;border-radius:12px;display:block;}
+  .photo-slots .retake{padding:5px 8px;font-size:11px;top:6px;right:6px;}
+
+  .campos-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .campo-field label{display:block;font-size:11.5px;color:var(--ink-soft);margin-bottom:5px;font-weight:650;}
+  .campo-field input{width:100%;padding:10px 12px;border-radius:10px;border:1.5px solid #DAD3C4;font-size:15px;background:var(--surface);}
+  .campo-field input:focus{outline:none;border-color:var(--teal);}
+
   .summary-wrap{
     background:var(--surface);border-radius:14px;padding:4px 14px;margin-bottom:12px;
     box-shadow:0 1px 3px rgba(20,50,45,0.08);border:1px solid rgba(20,50,45,0.06);
@@ -349,17 +384,6 @@ function fmtTime(ts){
   const d = new Date(ts);
   return d.toLocaleDateString('pt-PT',{day:'2-digit',month:'2-digit'}) + ' · ' + d.toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'});
 }
-function toDatetimeLocalValue(ts){
-  if(!ts) return '';
-  const d = new Date(ts);
-  const pad = n => String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function fromDatetimeLocalValue(str){
-  if(!str) return null;
-  const t = new Date(str).getTime();
-  return isNaN(t) ? null : t;
-}
 function esc(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function resizeImage(file, maxDim, quality){
@@ -424,13 +448,23 @@ function summarizeByDestino(frascos){
 
 function buildSummaryText(loc, frascos){
   const tide = TIDES[loc.mare];
+  const campos = loc.campos || {};
   const lines = [];
   lines.push(`Colheita de água — ${loc.nome}`);
   if(loc.dataRecolha) lines.push(`Data/hora: ${fmtTime(loc.dataRecolha)}`);
   if(tide) lines.push(`Maré: ${tide.label}`);
   if(loc.gps) lines.push(`Posição: ${loc.gps.lat.toFixed(5)}, ${loc.gps.lng.toFixed(5)}`);
+  const camposLinhas = CAMPOS_DEF
+    .filter(c => campos[c.key])
+    .map(c => `${c.label}: ${campos[c.key]}`);
+  if(camposLinhas.length){
+    lines.push('');
+    lines.push('Parâmetros de campo:');
+    camposLinhas.forEach(l => lines.push(`- ${l}`));
+  }
   lines.push('');
-  lines.push(`Total de frascos: ${frascos.length}`);
+  const recolhidos = frascos.filter(f => f.recolhido).length;
+  lines.push(`Total de frascos: ${frascos.length} (${recolhidos} recolhidos)`);
   lines.push('Por destino:');
   for(const [destino,count] of summarizeByDestino(frascos)){
     lines.push(`- ${destino}: ${count}`);
@@ -464,8 +498,6 @@ const headerSub = document.getElementById('headerSub');
 
 let view = 'list';
 let currentLocationId = null;
-let pendingNewLocationPhoto = null;
-let pendingGps = null;
 let pendingFrascoPhoto = null;
 let selectedTide = null;
 
@@ -504,7 +536,7 @@ async function renderList(){
       const isClosed = loc.estado === 'fechado';
       html += `
         <div class="loc-card" data-id="${loc.id}">
-          ${loc.foto ? `<img class="loc-thumb" src="${loc.foto}">` : `<div class="loc-thumb placeholder">📍</div>`}
+          ${(loc.fotos && loc.fotos[0]) || loc.foto ? `<img class="loc-thumb" src="${(loc.fotos && loc.fotos[0]) || loc.foto}">` : `<div class="loc-thumb placeholder">📍</div>`}
           <div class="loc-info">
             <div class="name">${esc(loc.nome)}</div>
             <div class="loc-meta">
@@ -551,15 +583,13 @@ function ensureFab(){
   }
 }
 
-/* ---------- New location form ---------- */
+/* ---------- New location form (Preparação: só nome + maré) ---------- */
 async function renderLocationForm(existingLoc){
   view = existingLoc ? 'editLocation' : 'newLocation';
-  pendingNewLocationPhoto = existingLoc ? (existingLoc.foto || null) : null;
-  pendingGps = existingLoc ? (existingLoc.gps || null) : null;
   selectedTide = existingLoc ? (existingLoc.mare || null) : null;
   backBtn.style.visibility = 'visible';
   headerTitle.textContent = existingLoc ? 'Editar local' : 'Novo local';
-  headerSub.textContent = 'preia-mar, baixa-mar…';
+  headerSub.textContent = 'preparação: nome e maré';
   ensureFab();
 
   const names = await loadLocationNames();
@@ -580,27 +610,13 @@ async function renderLocationForm(existingLoc){
       `).join('')}
     </div>
 
-    <label class="field-label">Foto do local</label>
-    <div id="photoArea"></div>
-
-    <label class="field-label">Posição GPS</label>
-    <div id="gpsArea"></div>
-
-    <label class="field-label">Data e hora da recolha</label>
-    <input type="datetime-local" id="locDataRecolha" value="${toDatetimeLocalValue(existingLoc ? existingLoc.dataRecolha : null)}">
-    <button class="btn-secondary" id="useNowBtn" style="padding:8px 0;">Usar data/hora atual</button>
-    <p style="font-size:12px;color:var(--ink-soft);margin-top:-6px;">Preenchida automaticamente quando obténs a posição GPS — podes ajustar à mão se precisares.</p>
+    <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.5;">
+      GPS, fotos e parâmetros de campo preenchem-se mais tarde, na página do local, no momento da recolha.
+    </p>
 
     <button class="btn-primary" id="saveLocBtn">${existingLoc ? 'Guardar alterações' : 'Guardar local'}</button>
     <button class="btn-secondary" id="cancelLocBtn">Cancelar</button>
   `;
-
-  renderPhotoArea();
-  renderGpsSection();
-
-  document.getElementById('useNowBtn').addEventListener('click', ()=>{
-    document.getElementById('locDataRecolha').value = toDatetimeLocalValue(Date.now());
-  });
 
   const locNomeInput = document.getElementById('locNome');
   document.querySelectorAll('#nameChips .name-chip[data-name]').forEach(chip=>{
@@ -638,18 +654,11 @@ async function renderLocationForm(existingLoc){
     btn.disabled = true; btn.textContent = 'A guardar…';
     const locations = await loadLocations();
     await addLocationName(nome);
-    const dataRecolha = fromDatetimeLocalValue(document.getElementById('locDataRecolha').value);
 
     if(existingLoc){
       const idx = locations.findIndex(l => l.id === existingLoc.id);
       if(idx >= 0){
-        locations[idx] = {
-          ...locations[idx],
-          nome, mare: selectedTide,
-          foto: pendingNewLocationPhoto,
-          gps: pendingGps,
-          dataRecolha
-        };
+        locations[idx] = { ...locations[idx], nome, mare: selectedTide };
         await saveLocations(locations);
       }
       renderLocationDetail(existingLoc.id);
@@ -658,9 +667,10 @@ async function renderLocationForm(existingLoc){
         id: uid(),
         nome,
         mare: selectedTide,
-        foto: pendingNewLocationPhoto,
-        gps: pendingGps,
-        dataRecolha,
+        fotos: [],
+        gps: null,
+        campos: {},
+        dataRecolha: null,
         estado: 'aberto',
         timestamp: Date.now()
       };
@@ -679,57 +689,78 @@ async function renderEditLocationForm(locId){
   renderLocationForm(loc);
 }
 
-/* ---------- Photo capture (local) ---------- */
-function renderPhotoArea(){
-  const area = document.getElementById('photoArea');
-  if(!area) return;
-  if(pendingNewLocationPhoto){
-    area.innerHTML = `
-      <div class="photo-preview-wrap">
-        <img class="photo-preview" src="${pendingNewLocationPhoto}">
-        <button class="retake" id="retakeBtn">Repetir foto</button>
-      </div>`;
-    document.getElementById('retakeBtn').addEventListener('click', capturePhoto);
-  } else {
-    area.innerHTML = `
-      <button class="photo-btn" id="takePhotoBtn">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="13" r="3.4" stroke="currentColor" stroke-width="1.6"/></svg>
-        Tirar foto do local
-      </button>`;
-    document.getElementById('takePhotoBtn').addEventListener('click', capturePhoto);
-  }
+/* ---------- Generic partial update ---------- */
+async function updateLocationField(locId, patch){
+  const locations = await loadLocations();
+  const idx = locations.findIndex(l => l.id === locId);
+  if(idx < 0) return null;
+  locations[idx] = { ...locations[idx], ...patch };
+  await saveLocations(locations);
+  return locations[idx];
 }
-async function capturePhoto(){
-  const dataUrl = await openCamera(700, 0.6);
-  if(dataUrl){
-    pendingNewLocationPhoto = dataUrl;
-    renderPhotoArea();
+/* ---------- Photo slots (Recolha, página de detalhe — 2 fotos, gravam direto) ---------- */
+function renderDetailPhotos(loc){
+  const area = document.getElementById('photoSlots');
+  if(!area) return;
+  const fotos = loc.fotos || (loc.foto ? [loc.foto] : []);
+  let html = '';
+  for(let i=0;i<2;i++){
+    const foto = fotos[i];
+    html += `<div class="photo-slot" data-index="${i}">`;
+    if(foto){
+      html += `
+        <div class="photo-preview-wrap">
+          <img src="${foto}">
+          <button class="retake" data-index="${i}">Repetir</button>
+        </div>`;
+    } else {
+      html += `
+        <button class="photo-btn" data-index="${i}">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="13" r="3.4" stroke="currentColor" stroke-width="1.6"/></svg>
+          Foto ${i+1}
+        </button>`;
+    }
+    html += `</div>`;
   }
+  area.innerHTML = html;
+  area.querySelectorAll('button[data-index]').forEach(btn=>{
+    btn.addEventListener('click', ()=> captureDetailPhoto(loc.id, parseInt(btn.dataset.index,10)));
+  });
+}
+async function captureDetailPhoto(locId, index){
+  const dataUrl = await openCamera(900, 0.65);
+  if(!dataUrl) return;
+  const locations = await loadLocations();
+  const loc = locations.find(l => l.id === locId);
+  if(!loc) return;
+  const fotos = loc.fotos || (loc.foto ? [loc.foto] : []);
+  fotos[index] = dataUrl;
+  const updated = await updateLocationField(locId, { fotos });
+  renderDetailPhotos(updated);
 }
 
-/* ---------- GPS capture ---------- */
-function renderGpsSection(){
+/* ---------- GPS (Recolha, página de detalhe — grava direto e define a data/hora) ---------- */
+function renderDetailGps(loc){
   const area = document.getElementById('gpsArea');
   if(!area) return;
-  if(pendingGps){
+  if(loc.gps){
     area.innerHTML = `
       <div class="gps-result">
-        <div class="gps-coords mono">${pendingGps.lat.toFixed(6)}, ${pendingGps.lng.toFixed(6)}</div>
-        <div class="gps-accuracy">precisão ±${Math.round(pendingGps.accuracy)} m</div>
+        <div class="gps-coords mono">${loc.gps.lat.toFixed(6)}, ${loc.gps.lng.toFixed(6)}</div>
+        <div class="gps-accuracy">precisão ±${Math.round(loc.gps.accuracy)} m</div>
         <button class="retake" id="retryGpsBtn" style="position:static;margin-top:8px;">Atualizar posição</button>
       </div>`;
-    document.getElementById('retryGpsBtn').addEventListener('click', requestGps);
+    document.getElementById('retryGpsBtn').addEventListener('click', ()=> requestDetailGps(loc.id));
   } else {
     area.innerHTML = `
       <button class="photo-btn" id="getGpsBtn">
         <svg viewBox="0 0 24 24" fill="none"><path d="M12 21s7-7.2 7-12a7 7 0 1 0-14 0c0 4.8 7 12 7 12z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="9" r="2.4" stroke="currentColor" stroke-width="1.6"/></svg>
         Obter posição GPS
       </button>`;
-    document.getElementById('getGpsBtn').addEventListener('click', requestGps);
+    document.getElementById('getGpsBtn').addEventListener('click', ()=> requestDetailGps(loc.id));
   }
 }
-
-function requestGps(){
+function requestDetailGps(locId){
   const area = document.getElementById('gpsArea');
   if(!area) return;
   area.innerHTML = `<div class="gps-loading"><div class="spinner" style="width:20px;height:20px;border-width:2.5px;"></div><span>A obter posição…</span></div>`;
@@ -738,24 +769,60 @@ function requestGps(){
     return;
   }
   navigator.geolocation.getCurrentPosition(
-    (pos)=>{
-      pendingGps = {
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
-        accuracy: pos.coords.accuracy
-      };
-      renderGpsSection();
-      const dtInput = document.getElementById('locDataRecolha');
-      if(dtInput) dtInput.value = toDatetimeLocalValue(pos.timestamp || Date.now());
+    async (pos)=>{
+      const gps = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
+      const locations = await loadLocations();
+      const current = locations.find(l => l.id === locId);
+      const dataRecolha = (current && current.dataRecolha) || pos.timestamp || Date.now();
+      const updated = await updateLocationField(locId, { gps, dataRecolha });
+      renderDetailGps(updated);
+      const dtEl = document.getElementById('dataRecolhaDisplay');
+      if(dtEl) dtEl.textContent = fmtTime(updated.dataRecolha);
     },
     (err)=>{
       area.innerHTML = `
         <div class="gps-error">Não foi possível obter a posição (${esc(err.message)}).</div>
         <button class="btn-secondary" id="retryGpsBtn2" style="padding:8px 0;">Tentar novamente</button>`;
-      document.getElementById('retryGpsBtn2').addEventListener('click', requestGps);
+      document.getElementById('retryGpsBtn2').addEventListener('click', ()=> requestDetailGps(locId));
     },
     { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
   );
+}
+
+/* ---------- Parâmetros de campo (Recolha) ---------- */
+const CAMPOS_DEF = [
+  { key: 'pctO2', label: '%O2 (%)' },
+  { key: 'o2', label: 'O2 (mg/L)' },
+  { key: 'temperatura', label: 'Temperatura (°C)' },
+  { key: 'salinidade', label: 'Salinidade' }
+];
+function wireCamposInputs(loc){
+  CAMPOS_DEF.forEach(c=>{
+    const input = document.getElementById('campo_'+c.key);
+    if(!input) return;
+    input.addEventListener('change', async ()=>{
+      const locations = await loadLocations();
+      const current = locations.find(l => l.id === loc.id);
+      const campos = { ...(current ? current.campos : {}), [c.key]: input.value.trim() };
+      await updateLocationField(loc.id, { campos });
+    });
+  });
+}
+
+/* ---------- Frascos: checklist "recolhido" ---------- */
+async function toggleFrascoRecolhido(locId, frascoId){
+  const frascos = await loadFrascos(locId);
+  const f = frascos.find(x => x.id === frascoId);
+  if(!f) return;
+  f.recolhido = !f.recolhido;
+  await saveFrascos(locId, frascos);
+  renderLocationDetail(locId);
+}
+async function markAllFrascos(locId, value){
+  const frascos = await loadFrascos(locId);
+  frascos.forEach(f => f.recolhido = value);
+  await saveFrascos(locId, frascos);
+  renderLocationDetail(locId);
 }
 
 /* ---------- Location detail ---------- */
@@ -773,15 +840,15 @@ async function renderLocationDetail(locId){
   const frascos = await loadFrascos(locId);
   const tide = TIDES[loc.mare] || null;
   const isClosed = loc.estado === 'fechado';
+  const campos = loc.campos || {};
+  const recolhidos = frascos.filter(f => f.recolhido).length;
+  const pct = frascos.length ? Math.round((recolhidos / frascos.length) * 100) : 0;
 
   let html = `
     <div class="top-actions">
-      <button class="btn-outline" id="editLocBtn">Editar</button>
-      <button class="btn-outline" id="toggleStatusBtn">${isClosed ? 'Reabrir local' : 'Fechar local'}</button>
-      <button class="btn-danger-outline" id="delLocBtn">Eliminar</button>
+      <button class="btn-outline" id="editLocBtn">Editar nome/maré</button>
     </div>
     <div class="detail-hero">
-      ${loc.foto ? `<img src="${loc.foto}">` : `<div class="hero-no-photo">Sem foto do local ainda — toca em "Editar" para adicionar.</div>`}
       <div class="detail-hero-top">
         <div class="name">${esc(loc.nome)}</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
@@ -789,13 +856,12 @@ async function renderLocationDetail(locId){
           ${tide ? `<span class="tide-badge ${tide.cls}">${tide.wave}${tide.label}</span>` : ''}
         </div>
       </div>
-      ${loc.dataRecolha ? `<div class="timestamp" style="font-weight:650;color:var(--teal-dark);">🕐 Recolhido em ${fmtTime(loc.dataRecolha)}</div>` : ''}
-      <div class="timestamp" style="${loc.dataRecolha ? 'opacity:0.65;' : ''}">Registado em ${fmtTime(loc.timestamp)}</div>
-      ${loc.gps
-        ? `<div class="timestamp gps-link-row">📍 <a class="gps-link" href="https://www.google.com/maps?q=${loc.gps.lat},${loc.gps.lng}" target="_blank" rel="noopener">${loc.gps.lat.toFixed(5)}, ${loc.gps.lng.toFixed(5)}</a></div>`
-        : `<div class="timestamp gps-link-row">📍 Sem posição GPS ainda — toca em "Editar" para a adicionar no local.</div>`}
+      ${loc.dataRecolha ? `<div class="timestamp" style="font-weight:650;color:var(--teal-dark);">🕐 Recolhido em <span id="dataRecolhaDisplay">${fmtTime(loc.dataRecolha)}</span></div>` : ''}
+      <div class="timestamp" style="${loc.dataRecolha ? 'opacity:0.65;' : ''}">Preparado em ${fmtTime(loc.timestamp)}</div>
     </div>
 
+    <!-- ETAPA 1: PREPARAÇÃO -->
+    <div class="stage-title"><span class="stage-num">1</span>Preparação — frascos a usar</div>
     <div class="section-title">
       <span>Frascos</span>
       <span class="count-pill">${frascos.length}</span>
@@ -818,6 +884,7 @@ async function renderLocationDetail(locId){
               <th>Nº</th>
               <th>Destino</th>
               <th>Nº Amostra</th>
+              <th>Recolhido</th>
               <th></th>
             </tr>
           </thead>
@@ -829,22 +896,48 @@ async function renderLocationDetail(locId){
               <td class="numero-cell mono">${esc(f.numero)}</td>
               <td>${esc(f.destino) || '—'}</td>
               <td>${esc(f.amostra) || '—'}</td>
+              <td><button class="frasco-check ${f.recolhido ? 'checked' : ''}" data-id="${f.id}">${f.recolhido ? '✓' : ''}</button></td>
               <td><button class="table-del-btn frasco-del" data-id="${f.id}">✕</button></td>
             </tr>`;
     }
     html += `
           </tbody>
         </table>
+      </div>
+      <div class="progress-row">
+        <span class="progress-text">${recolhidos} de ${frascos.length} recolhidos</span>
+        <div class="progress-bar-track"><div class="progress-bar-fill" style="width:${pct}%;"></div></div>
+        <button class="btn-secondary" id="markAllBtn" style="padding:6px 10px;font-size:12px;white-space:nowrap;">${recolhidos===frascos.length ? 'Desmarcar tudo' : 'Marcar tudo'}</button>
       </div>`;
   }
   html += `</div>`;
 
+  html += `
+    <!-- ETAPA 2: RECOLHA -->
+    <div class="stage-title" style="margin-top:28px;"><span class="stage-num">2</span>Recolha no local</div>
+
+    <label class="field-label" style="margin-top:0;">Posição GPS</label>
+    <div id="gpsArea"></div>
+
+    <label class="field-label">Fotos do local</label>
+    <div class="photo-slots" id="photoSlots"></div>
+
+    <label class="field-label">Parâmetros de campo</label>
+    <div class="campos-grid">
+      ${CAMPOS_DEF.map(c => `
+        <div class="campo-field">
+          <label>${c.label}</label>
+          <input type="text" inputmode="decimal" id="campo_${c.key}" value="${esc(campos[c.key] || '')}" placeholder="—">
+        </div>`).join('')}
+    </div>
+  `;
+
   if(frascos.length){
     const grouped = summarizeByDestino(frascos);
     html += `
-      <div class="section-title" style="margin-top:22px;">
-        <span>Resumo por destino</span>
-      </div>
+      <!-- ETAPA 3: FINALIZAR -->
+      <div class="stage-title" style="margin-top:28px;"><span class="stage-num">3</span>Finalizar</div>
+      <div class="section-title"><span>Resumo por destino</span></div>
       <div class="summary-wrap">
         ${grouped.map(([destino,count]) => `
           <div class="summary-row">
@@ -856,11 +949,25 @@ async function renderLocationDetail(locId){
           <span class="summary-count">${frascos.length} frasco${frascos.length===1?'':'s'}</span>
         </div>
       </div>
-      <button class="btn-secondary" id="copySummaryBtn">📋 Copiar resumo</button>`;
+      <button class="btn-secondary" id="copySummaryBtn">📋 Copiar resumo</button>
+      <button class="btn-secondary" id="exportFromDetailBtn">📤 Enviar cópia (Drive)</button>
+      <button class="btn-outline" id="toggleStatusBtn" style="width:100%;margin-top:10px;">${isClosed ? 'Reabrir local' : '🔒 Fechar local'}</button>
+    `;
+  } else {
+    html += `
+      <div class="stage-title" style="margin-top:28px;"><span class="stage-num">3</span>Finalizar</div>
+      <button class="btn-secondary" id="exportFromDetailBtn">📤 Enviar cópia (Drive)</button>
+      <button class="btn-outline" id="toggleStatusBtn" style="width:100%;margin-top:10px;">${isClosed ? 'Reabrir local' : '🔒 Fechar local'}</button>
+    `;
   }
 
+  html += `<button class="btn-danger-outline" id="delLocBtn" style="width:100%;margin-top:22px;">Eliminar local</button>`;
   html += `<div style="height:70px;"></div>`;
   app.innerHTML = html;
+
+  renderDetailGps(loc);
+  renderDetailPhotos(loc);
+  wireCamposInputs(loc);
 
   document.getElementById('editLocBtn').addEventListener('click', ()=> renderEditLocationForm(locId));
 
@@ -878,7 +985,25 @@ async function renderLocationDetail(locId){
     });
   }
 
+  document.getElementById('exportFromDetailBtn').addEventListener('click', shareBackup);
+
+  const markAllBtn = document.getElementById('markAllBtn');
+  if(markAllBtn){
+    markAllBtn.addEventListener('click', ()=> markAllFrascos(locId, recolhidos !== frascos.length));
+  }
+
+  document.querySelectorAll('.frasco-check').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      toggleFrascoRecolhido(locId, btn.dataset.id);
+    });
+  });
+
   document.getElementById('toggleStatusBtn').addEventListener('click', async ()=>{
+    if(!isClosed && frascos.some(f => !f.recolhido)){
+      const faltam = frascos.filter(f => !f.recolhido).length;
+      if(!confirm(`Ainda há ${faltam} frasco(s) por marcar como recolhidos. Fechar o local mesmo assim?`)) return;
+    }
     const all = await loadLocations();
     const idx = all.findIndex(l => l.id === locId);
     if(idx < 0) return;
@@ -1148,7 +1273,7 @@ function showFrascoSheet(locId, opts){
     const saveBtn = backdrop.querySelector('#saveFrascoBtn');
     saveBtn.disabled = true; saveBtn.textContent = 'A guardar…';
     const frascos = await loadFrascos(locId);
-    frascos.push({ id: uid(), frasco, numero, destino, amostra, timestamp: Date.now() });
+    frascos.push({ id: uid(), frasco, numero, destino, amostra, recolhido: false, timestamp: Date.now() });
     await saveFrascos(locId, frascos);
     await addKnownValue('known-params', frasco);
     await addKnownValue('known-destinos', destino);
