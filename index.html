@@ -172,6 +172,20 @@
     color:var(--ink-soft);font-size:13px;margin-bottom:12px;
   }
 
+  .summary-wrap{
+    background:var(--surface);border-radius:14px;padding:4px 14px;margin-bottom:12px;
+    box-shadow:0 1px 3px rgba(20,50,45,0.08);border:1px solid rgba(20,50,45,0.06);
+  }
+  .summary-row{
+    display:flex;justify-content:space-between;align-items:center;padding:10px 0;
+    border-bottom:1px solid #EFEAE0;font-size:13.5px;
+  }
+  .summary-row:last-child{border-bottom:none;}
+  .summary-destino{color:var(--ink);}
+  .summary-count{font-weight:700;color:var(--teal-dark);}
+  .summary-total{border-top:1.5px solid var(--foam-line);margin-top:2px;padding-top:12px;}
+  .summary-total .summary-destino{font-weight:700;}
+
   /* Location detail */
   .detail-hero{
     background:var(--surface);border-radius:16px;padding:14px;margin-bottom:18px;
@@ -335,6 +349,17 @@ function fmtTime(ts){
   const d = new Date(ts);
   return d.toLocaleDateString('pt-PT',{day:'2-digit',month:'2-digit'}) + ' · ' + d.toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'});
 }
+function toDatetimeLocalValue(ts){
+  if(!ts) return '';
+  const d = new Date(ts);
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromDatetimeLocalValue(str){
+  if(!str) return null;
+  const t = new Date(str).getTime();
+  return isNaN(t) ? null : t;
+}
 function esc(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function resizeImage(file, maxDim, quality){
@@ -386,6 +411,31 @@ function suggestNumero(frascos){
     return prefix + next;
   }
   return String(frascos.length + 1);
+}
+
+function summarizeByDestino(frascos){
+  const map = {};
+  for(const f of frascos){
+    const key = (f.destino && f.destino.trim()) ? f.destino.trim() : 'Sem destino definido';
+    map[key] = (map[key] || 0) + 1;
+  }
+  return Object.entries(map).sort((a,b)=> b[1]-a[1]);
+}
+
+function buildSummaryText(loc, frascos){
+  const tide = TIDES[loc.mare];
+  const lines = [];
+  lines.push(`Colheita de água — ${loc.nome}`);
+  if(loc.dataRecolha) lines.push(`Data/hora: ${fmtTime(loc.dataRecolha)}`);
+  if(tide) lines.push(`Maré: ${tide.label}`);
+  if(loc.gps) lines.push(`Posição: ${loc.gps.lat.toFixed(5)}, ${loc.gps.lng.toFixed(5)}`);
+  lines.push('');
+  lines.push(`Total de frascos: ${frascos.length}`);
+  lines.push('Por destino:');
+  for(const [destino,count] of summarizeByDestino(frascos)){
+    lines.push(`- ${destino}: ${count}`);
+  }
+  return lines.join('\n');
 }
 
 /* ---------------- Tide (maré) config ---------------- */
@@ -536,12 +586,21 @@ async function renderLocationForm(existingLoc){
     <label class="field-label">Posição GPS</label>
     <div id="gpsArea"></div>
 
+    <label class="field-label">Data e hora da recolha</label>
+    <input type="datetime-local" id="locDataRecolha" value="${toDatetimeLocalValue(existingLoc ? existingLoc.dataRecolha : null)}">
+    <button class="btn-secondary" id="useNowBtn" style="padding:8px 0;">Usar data/hora atual</button>
+    <p style="font-size:12px;color:var(--ink-soft);margin-top:-6px;">Preenchida automaticamente quando obténs a posição GPS — podes ajustar à mão se precisares.</p>
+
     <button class="btn-primary" id="saveLocBtn">${existingLoc ? 'Guardar alterações' : 'Guardar local'}</button>
     <button class="btn-secondary" id="cancelLocBtn">Cancelar</button>
   `;
 
   renderPhotoArea();
   renderGpsSection();
+
+  document.getElementById('useNowBtn').addEventListener('click', ()=>{
+    document.getElementById('locDataRecolha').value = toDatetimeLocalValue(Date.now());
+  });
 
   const locNomeInput = document.getElementById('locNome');
   document.querySelectorAll('#nameChips .name-chip[data-name]').forEach(chip=>{
@@ -579,6 +638,7 @@ async function renderLocationForm(existingLoc){
     btn.disabled = true; btn.textContent = 'A guardar…';
     const locations = await loadLocations();
     await addLocationName(nome);
+    const dataRecolha = fromDatetimeLocalValue(document.getElementById('locDataRecolha').value);
 
     if(existingLoc){
       const idx = locations.findIndex(l => l.id === existingLoc.id);
@@ -587,7 +647,8 @@ async function renderLocationForm(existingLoc){
           ...locations[idx],
           nome, mare: selectedTide,
           foto: pendingNewLocationPhoto,
-          gps: pendingGps
+          gps: pendingGps,
+          dataRecolha
         };
         await saveLocations(locations);
       }
@@ -599,6 +660,7 @@ async function renderLocationForm(existingLoc){
         mare: selectedTide,
         foto: pendingNewLocationPhoto,
         gps: pendingGps,
+        dataRecolha,
         estado: 'aberto',
         timestamp: Date.now()
       };
@@ -683,6 +745,8 @@ function requestGps(){
         accuracy: pos.coords.accuracy
       };
       renderGpsSection();
+      const dtInput = document.getElementById('locDataRecolha');
+      if(dtInput) dtInput.value = toDatetimeLocalValue(pos.timestamp || Date.now());
     },
     (err)=>{
       area.innerHTML = `
@@ -725,7 +789,8 @@ async function renderLocationDetail(locId){
           ${tide ? `<span class="tide-badge ${tide.cls}">${tide.wave}${tide.label}</span>` : ''}
         </div>
       </div>
-      <div class="timestamp">Registado em ${fmtTime(loc.timestamp)}</div>
+      ${loc.dataRecolha ? `<div class="timestamp" style="font-weight:650;color:var(--teal-dark);">🕐 Recolhido em ${fmtTime(loc.dataRecolha)}</div>` : ''}
+      <div class="timestamp" style="${loc.dataRecolha ? 'opacity:0.65;' : ''}">Registado em ${fmtTime(loc.timestamp)}</div>
       ${loc.gps
         ? `<div class="timestamp gps-link-row">📍 <a class="gps-link" href="https://www.google.com/maps?q=${loc.gps.lat},${loc.gps.lng}" target="_blank" rel="noopener">${loc.gps.lat.toFixed(5)}, ${loc.gps.lng.toFixed(5)}</a></div>`
         : `<div class="timestamp gps-link-row">📍 Sem posição GPS ainda — toca em "Editar" para a adicionar no local.</div>`}
@@ -772,12 +837,46 @@ async function renderLocationDetail(locId){
         </table>
       </div>`;
   }
-  html += `</div>
-    <div style="height:70px;"></div>
-  `;
+  html += `</div>`;
+
+  if(frascos.length){
+    const grouped = summarizeByDestino(frascos);
+    html += `
+      <div class="section-title" style="margin-top:22px;">
+        <span>Resumo por destino</span>
+      </div>
+      <div class="summary-wrap">
+        ${grouped.map(([destino,count]) => `
+          <div class="summary-row">
+            <span class="summary-destino">${esc(destino)}</span>
+            <span class="summary-count">${count} frasco${count===1?'':'s'}</span>
+          </div>`).join('')}
+        <div class="summary-row summary-total">
+          <span class="summary-destino">Total</span>
+          <span class="summary-count">${frascos.length} frasco${frascos.length===1?'':'s'}</span>
+        </div>
+      </div>
+      <button class="btn-secondary" id="copySummaryBtn">📋 Copiar resumo</button>`;
+  }
+
+  html += `<div style="height:70px;"></div>`;
   app.innerHTML = html;
 
   document.getElementById('editLocBtn').addEventListener('click', ()=> renderEditLocationForm(locId));
+
+  const copyBtn = document.getElementById('copySummaryBtn');
+  if(copyBtn){
+    copyBtn.addEventListener('click', async ()=>{
+      const text = buildSummaryText(loc, frascos);
+      try{
+        await navigator.clipboard.writeText(text);
+        copyBtn.textContent = '✅ Copiado!';
+      }catch(e){
+        copyBtn.textContent = '⚠️ Não foi possível copiar';
+      }
+      setTimeout(()=>{ copyBtn.textContent = '📋 Copiar resumo'; }, 2000);
+    });
+  }
 
   document.getElementById('toggleStatusBtn').addEventListener('click', async ()=>{
     const all = await loadLocations();
