@@ -1171,13 +1171,23 @@ function renderSettings(){
   removeAddFrascoBar();
   backBtn.style.visibility = 'visible';
   headerTitle.textContent = 'Definições';
-  headerSub.textContent = 'leitura automática de etiquetas';
+  headerSub.textContent = 'chave API e cópia de segurança';
   ensureFab();
 
   const currentKey = getApiKey();
 
   app.innerHTML = `
-    <label class="field-label" style="margin-top:0;">Chave API da Anthropic</label>
+    <label class="field-label" style="margin-top:0;">Cópia de segurança</label>
+    <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin-top:0;">
+      Todos os dados ficam guardados só neste telemóvel. Usa "Guardar cópia" para exportar tudo
+      (locais, frascos, fotos, GPS) para um ficheiro, e envia-o para o Google Drive através da
+      partilha do iPhone. "Importar cópia" traz esses dados de volta, neste ou noutro telemóvel.
+    </p>
+    <button class="btn-primary" id="exportBtn">📤 Guardar cópia (Drive / Ficheiros)</button>
+    <button class="btn-secondary" id="importBtn">📥 Importar cópia</button>
+    <input type="file" id="importFileInput" accept="application/json,.json" style="display:none;">
+
+    <label class="field-label">Chave API da Anthropic</label>
     <input type="text" id="apiKeyInput" placeholder="sk-ant-..." value="${esc(currentKey)}" autocapitalize="off" autocorrect="off" spellcheck="false">
     <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin-top:8px;">
       Usada apenas neste telemóvel para pedir à IA que leia os campos das etiquetas dos frascos a partir da foto.
@@ -1188,6 +1198,30 @@ function renderSettings(){
     <button class="btn-primary" id="saveKeyBtn">Guardar chave</button>
     ${currentKey ? `<button class="btn-secondary" id="clearKeyBtn">Remover chave guardada</button>` : ''}
   `;
+
+  document.getElementById('exportBtn').addEventListener('click', shareBackup);
+  document.getElementById('importBtn').addEventListener('click', ()=>{
+    document.getElementById('importFileInput').click();
+  });
+  document.getElementById('importFileInput').addEventListener('change', async (e)=>{
+    const file = e.target.files[0];
+    e.target.value = '';
+    if(!file) return;
+    try{
+      const text = await file.text();
+      const backup = JSON.parse(text);
+      if(!backup || !Array.isArray(backup.locations)){
+        alert('Este ficheiro não parece ser uma cópia de segurança válida.');
+        return;
+      }
+      if(!confirm(`Isto substitui TODOS os dados atuais por ${backup.locations.length} local(is) deste ficheiro. Continuar?`)) return;
+      await restoreBackup(backup);
+      alert('Cópia importada com sucesso.');
+      renderList();
+    }catch(err){
+      alert('Não foi possível ler este ficheiro.');
+    }
+  });
 
   document.getElementById('saveKeyBtn').addEventListener('click', ()=>{
     const val = document.getElementById('apiKeyInput').value.trim();
@@ -1201,6 +1235,67 @@ function renderSettings(){
       renderSettings();
     });
   }
+}
+
+/* ---------- Backup / restore (Drive via share sheet, or manual file) ---------- */
+async function buildBackupObject(){
+  const locations = await loadLocations();
+  const frascosByLocation = {};
+  for(const loc of locations){
+    frascosByLocation[loc.id] = await loadFrascos(loc.id);
+  }
+  const locationNames = await loadLocationNames();
+  const knownParams = await loadKnownList('known-params');
+  const knownDestinos = await loadKnownList('known-destinos');
+  return {
+    version: 1,
+    exportedAt: Date.now(),
+    locations,
+    frascosByLocation,
+    locationNames,
+    knownParams,
+    knownDestinos
+  };
+}
+
+async function shareBackup(){
+  const btn = document.getElementById('exportBtn');
+  const original = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'A preparar…'; }
+
+  const backup = await buildBackupObject();
+  const json = JSON.stringify(backup, null, 2);
+  const filename = `colheita-agua-backup-${new Date().toISOString().slice(0,10)}.json`;
+
+  if(btn){ btn.disabled = false; btn.textContent = original; }
+
+  try{
+    const file = new File([json], filename, { type: 'application/json' });
+    if(navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({ files: [file], title: 'Colheita de Água — cópia de segurança' });
+      return;
+    }
+  }catch(e){
+    if(e && e.name === 'AbortError') return; // utilizador cancelou a partilha
+  }
+
+  // fallback: descarregar o ficheiro diretamente
+  const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=> URL.revokeObjectURL(url), 5000);
+}
+
+async function restoreBackup(backup){
+  await saveLocations(backup.locations || []);
+  const frascosByLocation = backup.frascosByLocation || {};
+  for(const locId of Object.keys(frascosByLocation)){
+    await saveFrascos(locId, frascosByLocation[locId]);
+  }
+  if(Array.isArray(backup.locationNames)) await safeSet('location-names', backup.locationNames);
+  if(Array.isArray(backup.knownParams)) await safeSet('known-params', backup.knownParams);
+  if(Array.isArray(backup.knownDestinos)) await safeSet('known-destinos', backup.knownDestinos);
 }
 
 /* patch renderList/renderLocationDetail transitions to manage add-frasco bar */
