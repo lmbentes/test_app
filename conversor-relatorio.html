@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conversor — Colheita de Água → Excel</title>
+<style>
+  :root{
+    --bg:#F6F2EA; --surface:#FFFFFF; --ink:#16302E; --ink-soft:#4A605E;
+    --teal:#0E6B66; --teal-dark:#0A4B47; --foam:#D9EFEA; --foam-line:#BFE3DD;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:32px 20px 80px 20px;
+  }
+  .wrap{max-width:640px;margin:0 auto;}
+  h1{font-size:22px;margin:0 0 6px 0;color:var(--teal-dark);}
+  .sub{color:var(--ink-soft);font-size:14px;margin-bottom:28px;line-height:1.5;}
+  .card{
+    background:var(--surface);border-radius:16px;padding:22px;margin-bottom:18px;
+    box-shadow:0 1px 3px rgba(20,50,45,0.08);border:1px solid rgba(20,50,45,0.06);
+  }
+  .drop{
+    border:2px dashed #B9C9C5;border-radius:14px;padding:34px 16px;text-align:center;
+    cursor:pointer;transition:border-color .15s, background .15s;
+  }
+  .drop.dragover{border-color:var(--teal);background:var(--foam);}
+  .drop svg{width:34px;height:34px;color:var(--teal);margin-bottom:10px;}
+  .drop p{margin:4px 0;color:var(--ink-soft);font-size:13.5px;}
+  .drop strong{color:var(--teal-dark);}
+  input[type=file]{display:none;}
+
+  .file-list{margin-top:14px;}
+  .file-row{
+    display:flex;justify-content:space-between;align-items:center;padding:9px 12px;
+    background:var(--foam);border-radius:10px;font-size:13px;margin-bottom:7px;
+  }
+  .file-row button{background:none;border:none;color:var(--ink-soft);font-size:15px;cursor:pointer;}
+
+  .btn-primary{
+    width:100%;background:var(--teal);color:#fff;border:none;border-radius:12px;
+    padding:14px;font-size:15.5px;font-weight:650;cursor:pointer;margin-top:16px;
+  }
+  .btn-primary:disabled{background:#B9C9C5;cursor:default;}
+
+  .summary{font-size:13px;color:var(--ink-soft);line-height:1.6;margin-top:14px;}
+  .summary b{color:var(--ink);}
+
+  .status{font-size:13px;margin-top:12px;padding:10px 12px;border-radius:10px;}
+  .status.ok{background:var(--foam);color:var(--teal-dark);}
+  .status.err{background:#FBE4DB;color:#8A3D1E;}
+
+  h2{font-size:14px;color:var(--teal-dark);margin:0 0 10px 0;}
+  ol{padding-left:20px;font-size:13.5px;color:var(--ink-soft);line-height:1.7;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🌊 Conversor — Colheita de Água → Excel</h1>
+  <p class="sub">Junta um ou vários ficheiros de cópia de segurança (.json) exportados da app "Colheita de Água" e gera um Excel pronto para relatório. Tudo acontece aqui no teu browser — nenhum dado é enviado para lado nenhum.</p>
+
+  <div class="card">
+    <div class="drop" id="dropZone">
+      <svg viewBox="0 0 24 24" fill="none" style="margin:0 auto;display:block;"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <p><strong>Toca para escolher</strong> ou arrasta aqui os ficheiros .json</p>
+      <p>Podes escolher vários de uma vez (várias colheitas)</p>
+    </div>
+    <input type="file" id="fileInput" accept=".json,application/json" multiple>
+    <div class="file-list" id="fileList"></div>
+    <div id="statusBox"></div>
+    <button class="btn-primary" id="generateBtn" disabled>📊 Gerar Excel</button>
+  </div>
+
+  <div class="card">
+    <h2>Como usar</h2>
+    <ol>
+      <li>Na app, vai a <strong>Definições → Guardar cópia</strong> e exporta o ficheiro .json (podes enviá-lo para o Drive e depois transferi-lo para o PC, ou enviar diretamente por AirDrop/email).</li>
+      <li>Abre este ficheiro aqui no browser do PC (basta clicar duas vezes nele).</li>
+      <li>Escolhe o(s) ficheiro(s) .json e toca em "Gerar Excel".</li>
+      <li>O Excel é descarregado automaticamente, com uma folha por local, frascos e resumo por destino.</li>
+    </ol>
+    <p style="font-size:12.5px;color:var(--ink-soft);margin-top:12px;">
+      Cada cópia da app já contém <strong>todo o histórico</strong> guardado no telemóvel até esse momento —
+      por isso, normalmente basta usares sempre o ficheiro mais recente. Só precisas de juntar vários
+      ficheiros aqui se tiveres apagado dados no telemóvel entretanto e quiseres recuperar colheitas antigas
+      que já não estão lá.
+    </p>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+let loadedFiles = []; // { name, backup }
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const fileListEl = document.getElementById('fileList');
+const statusBox = document.getElementById('statusBox');
+const generateBtn = document.getElementById('generateBtn');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  handleFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', (e) => {
+  handleFiles(e.target.files);
+  fileInput.value = '';
+});
+
+async function handleFiles(fileListArg){
+  statusBox.innerHTML = '';
+  for(const file of fileListArg){
+    try{
+      const text = await file.text();
+      const backup = JSON.parse(text);
+      if(!backup || !Array.isArray(backup.locations)){
+        showStatus(`"${file.name}" não parece ser uma cópia de segurança válida.`, 'err');
+        continue;
+      }
+      loadedFiles.push({ name: file.name, backup });
+    }catch(e){
+      showStatus(`Não consegui ler "${file.name}".`, 'err');
+    }
+  }
+  renderFileList();
+}
+
+function renderFileList(){
+  fileListEl.innerHTML = loadedFiles.map((f, i) => `
+    <div class="file-row">
+      <span>${escapeHtml(f.name)} — ${f.backup.locations.length} local(is)</span>
+      <button data-index="${i}">✕</button>
+    </div>`).join('');
+  fileListEl.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      loadedFiles.splice(parseInt(btn.dataset.index, 10), 1);
+      renderFileList();
+    });
+  });
+  generateBtn.disabled = loadedFiles.length === 0;
+}
+
+function showStatus(msg, type){
+  statusBox.innerHTML = `<div class="status ${type}">${escapeHtml(msg)}</div>`;
+}
+
+function escapeHtml(s){
+  return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+const TIDE_LABELS = { baixa: 'Baixa-mar', preia: 'Preia-mar', enchente: 'Enchente', vazante: 'Vazante' };
+
+function fmtDateTime(ts){
+  if(!ts) return '';
+  const d = new Date(ts);
+  return d.toLocaleDateString('pt-PT') + ' ' + d.toLocaleTimeString('pt-PT', {hour:'2-digit', minute:'2-digit'});
+}
+
+generateBtn.addEventListener('click', () => {
+  generateBtn.disabled = true;
+  generateBtn.textContent = 'A gerar…';
+
+  // Junta todos os locais de todos os ficheiros, o último ficheiro escolhido vence em caso de duplicado (mesmo id)
+  const locationsById = {};
+  const frascosById = {};
+  for(const { backup } of loadedFiles){
+    for(const loc of (backup.locations || [])){
+      locationsById[loc.id] = loc;
+    }
+    const fbl = backup.frascosByLocation || {};
+    for(const locId of Object.keys(fbl)){
+      frascosById[locId] = fbl[locId];
+    }
+  }
+
+  const locations = Object.values(locationsById).sort((a,b) => (a.timestamp||0) - (b.timestamp||0));
+
+  const locaisRows = [];
+  const frascosRows = [];
+  const destinoTotais = {};
+
+  for(const loc of locations){
+    const frascos = frascosById[loc.id] || [];
+    const campos = loc.campos || {};
+    const recolhidos = frascos.filter(f => f.recolhido).length;
+
+    locaisRows.push({
+      'Local': loc.nome || '',
+      'Estado': loc.estado === 'fechado' ? 'Fechado' : 'Em curso',
+      'Data Prevista': loc.dataPrevista || '',
+      'Hora Maré Prevista': loc.horaMare || '',
+      'Altura Maré Prevista (m)': loc.alturaMare || '',
+      'Maré': TIDE_LABELS[loc.mare] || '',
+      'Data/Hora Recolha': fmtDateTime(loc.dataRecolha),
+      'Registado em': fmtDateTime(loc.timestamp),
+      'GPS Latitude': loc.gps ? loc.gps.lat : '',
+      'GPS Longitude': loc.gps ? loc.gps.lng : '',
+      'Códigos de Amostra': (loc.codigos || []).filter(c => c.valor).map(c => `${c.label || 'Código'}: ${c.valor}`).join(' | '),
+      '%O2': campos.pctO2 || '',
+      'O2 (mg/L)': campos.o2 || '',
+      'Temperatura (°C)': campos.temperatura || '',
+      'Salinidade': campos.salinidade || '',
+      'Total Frascos': frascos.length,
+      'Frascos Recolhidos': recolhidos
+    });
+
+    for(const f of frascos){
+      frascosRows.push({
+        'Local': loc.nome || '',
+        'Data/Hora Recolha': fmtDateTime(loc.dataRecolha),
+        'Frasco (parâmetro)': f.frasco || '',
+        'Nº': f.numero || '',
+        'Destino': f.destino || '',
+        'Nº Amostra': f.amostra || '',
+        'Recolhido': f.recolhido ? 'Sim' : 'Não'
+      });
+      const destKey = (f.destino && f.destino.trim()) ? f.destino.trim() : 'Sem destino definido';
+      destinoTotais[destKey] = (destinoTotais[destKey] || 0) + 1;
+    }
+  }
+
+  const resumoRows = Object.entries(destinoTotais)
+    .sort((a,b) => b[1]-a[1])
+    .map(([destino, total]) => ({ 'Destino': destino, 'Total de Frascos': total }));
+  resumoRows.push({ 'Destino': 'TOTAL', 'Total de Frascos': frascosRows.length });
+
+  const wb = XLSX.utils.book_new();
+  const wsLocais = XLSX.utils.json_to_sheet(locaisRows);
+  const wsFrascos = XLSX.utils.json_to_sheet(frascosRows);
+  const wsResumo = XLSX.utils.json_to_sheet(resumoRows);
+
+  autoWidth(wsLocais, locaisRows);
+  autoWidth(wsFrascos, frascosRows);
+  autoWidth(wsResumo, resumoRows);
+
+  XLSX.utils.book_append_sheet(wb, wsLocais, 'Locais');
+  XLSX.utils.book_append_sheet(wb, wsFrascos, 'Frascos');
+  XLSX.utils.book_append_sheet(wb, wsResumo, 'Resumo por Destino');
+
+  const filename = `relatorio-colheita-agua-${new Date().toISOString().slice(0,10)}.xlsx`;
+  XLSX.writeFile(wb, filename);
+
+  showStatus(`✅ Excel gerado: ${locations.length} local(is), ${frascosRows.length} frasco(s).`, 'ok');
+  generateBtn.disabled = false;
+  generateBtn.textContent = '📊 Gerar Excel';
+});
+
+function autoWidth(ws, rows){
+  if(!rows.length) return;
+  const keys = Object.keys(rows[0]);
+  ws['!cols'] = keys.map(k => {
+    const maxLen = Math.max(k.length, ...rows.map(r => String(r[k] ?? '').length));
+    return { wch: Math.min(Math.max(maxLen + 2, 10), 40) };
+  });
+}
+</script>
+</body>
+</html>

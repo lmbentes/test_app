@@ -31,16 +31,31 @@ Na primeira vez que usares a câmara e o GPS, o iPhone vai pedir permissão — 
 
 ## Ativar a leitura automática das etiquetas (opcional)
 
-A app consegue fotografar a etiqueta de um frasco e preencher automaticamente os campos Frasco, Nº, Destino e Nº Amostra, usando a API da Anthropic (Claude). Fora do ambiente do Claude.ai, isto precisa de uma chave API tua:
+A app consegue fotografar a etiqueta de um frasco e preencher automaticamente os campos Frasco, Nº, Destino e Nº Amostra:
 
+- **Sem chave API**: usa OCR local e gratuito (Tesseract.js), que corre no telemóvel. Precisa de internet só na primeira leitura (para descarregar o modelo de português), depois funciona sem custos.
+- **Com chave API da Anthropic**: leitura mais robusta feita por IA, indicada para etiquetas com letra manuscrita ou mais confusas.
+
+Para configurar a chave (opcional):
 1. Cria uma conta em [console.anthropic.com](https://console.anthropic.com).
 2. Vai a **API Keys** e cria uma chave nova.
-3. Na app, abre **Definições** (no fundo do ecrã principal) e cola a chave.
-4. A chave fica guardada só no teu telemóvel (localStorage do Safari) — nunca é enviada para mais lado nenhum.
+3. Na app, abre **Definições** e cola a chave.
+4. A chave fica guardada só no teu telemóvel.
 
-Sem chave configurada, a app continua a funcionar normalmente — só a leitura automática fica desativada, e preenches a tabela à mão (com sugestões automáticas de número, destino, etc.).
+**Nota sobre custos:** só a opção com chave API consome créditos da tua conta Anthropic (uma fração de cêntimo por leitura). A opção sem chave (Tesseract) é sempre grátis.
 
-**Nota sobre custos:** cada leitura de etiqueta consome créditos da tua conta Anthropic (é uma chamada à API com imagem). Consulta os preços atuais em anthropic.com — para o volume normal de uma colheita de campo, o custo é tipicamente uma fração de cêntimo por leitura.
+## Gerar um relatório em Excel (conversor-relatorio.html)
+
+O ficheiro `conversor-relatorio.html` (incluído nesta pasta) é uma ferramenta separada, para usar no teu computador — não precisa de estar no GitHub Pages nem de internet depois de aberta uma vez.
+
+1. Na app, vai a **Definições → Guardar cópia** e exporta o `.json` (por exemplo, para o Google Drive) e depois transfere-o para o PC.
+2. Abre o ficheiro `conversor-relatorio.html` diretamente no browser do PC (basta clicar duas vezes).
+3. Escolhe o ficheiro `.json` (ou vários, se tiveres mais do que um) e toca em **"Gerar Excel"**.
+4. É descarregado um `.xlsx` com três folhas: **Locais** (um por linha, com maré, GPS, parâmetros de campo, etc.), **Frascos** (um por linha, com Frasco/Nº/Destino/Nº Amostra/Recolhido) e **Resumo por Destino** (totais).
+
+Como cada cópia exportada da app já contém todo o histórico guardado no telemóvel, normalmente basta usares sempre o ficheiro mais recente — só precisas de juntar vários ficheiros no conversor se tiveres apagado dados entretanto e quiseres recuperar colheitas antigas.
+
+Este Excel gerado é, na prática, a tua "base de dados" — mantém-no e volta a gerá-lo (substituindo o anterior) sempre que quiseres atualizar o relatório com as colheitas mais recentes.
 
 ## Notas técnicas
 

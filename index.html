@@ -207,6 +207,11 @@
   .campo-field input{width:100%;padding:10px 12px;border-radius:10px;border:1.5px solid #DAD3C4;font-size:15px;background:var(--surface);}
   .campo-field input:focus{outline:none;border-color:var(--teal);}
 
+  .codigo-row{display:flex;gap:8px;margin-bottom:8px;align-items:center;}
+  .codigo-row .codigo-label{flex:1.1;padding:10px 12px;border-radius:10px;border:1.5px solid #DAD3C4;font-size:13.5px;}
+  .codigo-row .codigo-valor{flex:1;padding:10px 12px;border-radius:10px;border:1.5px solid #DAD3C4;font-size:13.5px;}
+  .codigo-row .codigo-del{background:none;border:none;color:var(--ink-soft);font-size:16px;padding:4px 6px;cursor:pointer;flex-shrink:0;}
+
   .summary-wrap{
     background:var(--surface);border-radius:14px;padding:4px 14px;margin-bottom:12px;
     box-shadow:0 1px 3px rgba(20,50,45,0.08);border:1px solid rgba(20,50,45,0.06);
@@ -365,7 +370,16 @@ async function saveLocations(list){ return await safeSet('locations', list); }
 async function loadLocationNames(){
   let names = await safeGet('location-names');
   if(!names){
-    names = ['Companheira','Pomarão Pontão','Pomarão Pontão+Barco'];
+    names = ['Companheira A','Companheira B','Companheira C','Companheira D','Pomarão Pontão','Pomarão Pontão+Barco'];
+    await safeSet('location-names', names);
+    return names;
+  }
+  // Migração: instalações antigas tinham só "Companheira" — passa a A/B/C/D
+  const hasPlainCompanheira = names.some(n => n.trim().toLowerCase() === 'companheira');
+  const hasVariants = names.some(n => /^companheira [a-d]$/i.test(n.trim()));
+  if(hasPlainCompanheira && !hasVariants){
+    names = names.filter(n => n.trim().toLowerCase() !== 'companheira');
+    names.unshift('Companheira A','Companheira B','Companheira C','Companheira D');
     await safeSet('location-names', names);
   }
   return names;
@@ -386,6 +400,12 @@ function uid(){ return Date.now().toString(36) + Math.random().toString(36).slic
 function fmtTime(ts){
   const d = new Date(ts);
   return d.toLocaleDateString('pt-PT',{day:'2-digit',month:'2-digit'}) + ' · ' + d.toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'});
+}
+function fmtDateOnly(dateStr){
+  if(!dateStr) return '';
+  const [y,m,d] = dateStr.split('-');
+  if(!y||!m||!d) return dateStr;
+  return `${d}/${m}/${y}`;
 }
 function esc(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -455,8 +475,16 @@ function buildSummaryText(loc, frascos){
   const lines = [];
   lines.push(`Colheita de água — ${loc.nome}`);
   if(loc.dataRecolha) lines.push(`Data/hora: ${fmtTime(loc.dataRecolha)}`);
+  if(loc.dataPrevista) lines.push(`Data prevista: ${fmtDateOnly(loc.dataPrevista)}`);
   if(tide) lines.push(`Maré: ${tide.label}`);
+  if(loc.horaMare || loc.alturaMare) lines.push(`Maré prevista: ${loc.horaMare || '—'}${loc.alturaMare ? ` (${loc.alturaMare} m)` : ''}`);
   if(loc.gps) lines.push(`Posição: ${loc.gps.lat.toFixed(5)}, ${loc.gps.lng.toFixed(5)}`);
+  const codigosComValor = (loc.codigos || []).filter(c => c.valor);
+  if(codigosComValor.length){
+    lines.push('');
+    lines.push('Códigos de amostra:');
+    codigosComValor.forEach(c => lines.push(`- ${c.label || 'Código'}: ${c.valor}`));
+  }
   const camposLinhas = CAMPOS_DEF
     .filter(c => campos[c.key])
     .map(c => `${c.label}: ${campos[c.key]}`);
@@ -587,12 +615,20 @@ function ensureFab(){
 }
 
 /* ---------- New location form (Preparação: só nome + maré) ---------- */
+let codigosState = [];
+
 async function renderLocationForm(existingLoc){
   view = existingLoc ? 'editLocation' : 'newLocation';
   selectedTide = existingLoc ? (existingLoc.mare || null) : null;
+  codigosState = (existingLoc && existingLoc.codigos && existingLoc.codigos.length)
+    ? existingLoc.codigos.map(c => ({ ...c }))
+    : [
+        { label: 'Código da amostra', valor: '' },
+        { label: 'Código da amostra de grande volume', valor: '' }
+      ];
   backBtn.style.visibility = 'visible';
   headerTitle.textContent = existingLoc ? 'Editar local' : 'Novo local';
-  headerSub.textContent = 'preparação: nome e maré';
+  headerSub.textContent = 'preparação do local';
   ensureFab();
 
   const names = await loadLocationNames();
@@ -613,13 +649,39 @@ async function renderLocationForm(existingLoc){
       `).join('')}
     </div>
 
-    <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.5;">
+    <label class="field-label">Data prevista da colheita</label>
+    <input type="date" id="locDataPrevista" value="${existingLoc && existingLoc.dataPrevista ? esc(existingLoc.dataPrevista) : ''}">
+
+    <label class="field-label">Maré prevista</label>
+    <div class="campos-grid">
+      <div class="campo-field">
+        <label>Hora da maré</label>
+        <input type="time" id="locHoraMare" value="${existingLoc && existingLoc.horaMare ? esc(existingLoc.horaMare) : ''}">
+      </div>
+      <div class="campo-field">
+        <label>Altura da maré (m)</label>
+        <input type="text" inputmode="decimal" id="locAlturaMare" placeholder="Ex.: 1.2" value="${existingLoc && existingLoc.alturaMare ? esc(existingLoc.alturaMare) : ''}">
+      </div>
+    </div>
+
+    <label class="field-label">Códigos de amostra</label>
+    <div id="codigosArea"></div>
+    <button type="button" class="btn-secondary" id="addCodigoBtn" style="padding:8px 0;">+ Adicionar código</button>
+
+    <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin-top:14px;">
       GPS, fotos e parâmetros de campo preenchem-se mais tarde, na página do local, no momento da recolha.
     </p>
 
     <button class="btn-primary" id="saveLocBtn">${existingLoc ? 'Guardar alterações' : 'Guardar local'}</button>
     <button class="btn-secondary" id="cancelLocBtn">Cancelar</button>
   `;
+
+  renderCodigosArea();
+  document.getElementById('addCodigoBtn').addEventListener('click', ()=>{
+    syncCodigosFromDom();
+    codigosState.push({ label:'', valor:'' });
+    renderCodigosArea();
+  });
 
   const locNomeInput = document.getElementById('locNome');
   document.querySelectorAll('#nameChips .name-chip[data-name]').forEach(chip=>{
@@ -658,10 +720,16 @@ async function renderLocationForm(existingLoc){
     const locations = await loadLocations();
     await addLocationName(nome);
 
+    const dataPrevista = document.getElementById('locDataPrevista').value || null;
+    const horaMare = document.getElementById('locHoraMare').value || null;
+    const alturaMare = document.getElementById('locAlturaMare').value.trim() || null;
+    syncCodigosFromDom();
+    const codigos = codigosState.filter(c => c.label.trim() || c.valor.trim());
+
     if(existingLoc){
       const idx = locations.findIndex(l => l.id === existingLoc.id);
       if(idx >= 0){
-        locations[idx] = { ...locations[idx], nome, mare: selectedTide };
+        locations[idx] = { ...locations[idx], nome, mare: selectedTide, dataPrevista, horaMare, alturaMare, codigos };
         await saveLocations(locations);
       }
       renderLocationDetail(existingLoc.id);
@@ -670,6 +738,7 @@ async function renderLocationForm(existingLoc){
         id: uid(),
         nome,
         mare: selectedTide,
+        dataPrevista, horaMare, alturaMare, codigos,
         fotos: [],
         gps: null,
         campos: {},
@@ -684,6 +753,31 @@ async function renderLocationForm(existingLoc){
     }
   });
 }
+function renderCodigosArea(){
+  const area = document.getElementById('codigosArea');
+  if(!area) return;
+  area.innerHTML = codigosState.map((c, i) => `
+    <div class="codigo-row" data-index="${i}">
+      <input type="text" class="codigo-label" placeholder="Nome do código" value="${esc(c.label)}">
+      <input type="text" class="codigo-valor" placeholder="Código" value="${esc(c.valor)}">
+      <button type="button" class="codigo-del" data-index="${i}">✕</button>
+    </div>`).join('');
+  area.querySelectorAll('.codigo-del').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      syncCodigosFromDom();
+      codigosState.splice(parseInt(btn.dataset.index,10), 1);
+      renderCodigosArea();
+    });
+  });
+}
+function syncCodigosFromDom(){
+  const rows = document.querySelectorAll('#codigosArea .codigo-row');
+  codigosState = Array.from(rows).map(row => ({
+    label: row.querySelector('.codigo-label').value,
+    valor: row.querySelector('.codigo-valor').value
+  }));
+}
+
 function renderNewLocationForm(){ renderLocationForm(null); }
 async function renderEditLocationForm(locId){
   const locations = await loadLocations();
@@ -849,7 +943,7 @@ async function renderLocationDetail(locId){
 
   let html = `
     <div class="top-actions">
-      <button class="btn-outline" id="editLocBtn">Editar nome/maré</button>
+      <button class="btn-outline" id="editLocBtn">Editar preparação</button>
     </div>
     <div class="detail-hero">
       <div class="detail-hero-top">
@@ -861,6 +955,12 @@ async function renderLocationDetail(locId){
       </div>
       ${loc.dataRecolha ? `<div class="timestamp" style="font-weight:650;color:var(--teal-dark);">🕐 Recolhido em <span id="dataRecolhaDisplay">${fmtTime(loc.dataRecolha)}</span></div>` : ''}
       <div class="timestamp" style="${loc.dataRecolha ? 'opacity:0.65;' : ''}">Preparado em ${fmtTime(loc.timestamp)}</div>
+      ${loc.dataPrevista ? `<div class="timestamp">📅 Previsto para ${fmtDateOnly(loc.dataPrevista)}</div>` : ''}
+      ${(loc.horaMare || loc.alturaMare) ? `<div class="timestamp">🌊 Maré prevista: ${loc.horaMare ? esc(loc.horaMare) : '—'}${loc.alturaMare ? ` · ${esc(loc.alturaMare)} m` : ''}</div>` : ''}
+      ${(loc.codigos && loc.codigos.some(c => c.valor)) ? `
+        <div class="timestamp" style="margin-top:4px;">
+          ${loc.codigos.filter(c => c.valor).map(c => `🏷️ ${esc(c.label || 'Código')}: <strong>${esc(c.valor)}</strong>`).join('<br>')}
+        </div>` : ''}
     </div>
 
     <!-- ETAPA 1: PREPARAÇÃO -->
