@@ -321,6 +321,32 @@
     font-weight:650;color:inherit;cursor:pointer;
   }
 
+  .proc-note{
+    background:#EFF6F0;color:#2E5240;border-radius:10px;padding:9px 11px;font-size:12.5px;line-height:1.45;
+    margin:2px 0 14px 0;border:1px solid #D6E6D9;
+  }
+  .proc-note-add{
+    background:transparent;color:var(--ink-soft);border:1px dashed #C7BFAE;
+    display:flex;flex-direction:column;gap:6px;align-items:flex-start;
+  }
+  .proc-note-add button{
+    background:var(--foam);color:var(--teal-dark);border:none;border-radius:8px;padding:6px 10px;
+    font-size:12px;font-weight:650;cursor:pointer;
+  }
+  .proc-note-add textarea{
+    width:100%;border-radius:8px;border:1.5px solid #DAD3C4;padding:8px 10px;font-size:13px;
+    font-family:inherit;resize:vertical;
+  }
+
+  .kb-row{
+    background:var(--surface);border-radius:12px;padding:12px;margin-bottom:10px;
+    box-shadow:0 1px 3px rgba(20,50,45,0.08);border:1px solid rgba(20,50,45,0.06);
+  }
+  .kb-row-head{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
+  .kb-row-head .kb-label{flex:1;padding:9px 11px;border-radius:9px;border:1.5px solid #DAD3C4;font-size:13.5px;font-weight:650;}
+  .kb-row-head button{background:none;border:none;color:var(--ink-soft);font-size:16px;cursor:pointer;flex-shrink:0;}
+  .kb-texto{width:100%;padding:9px 11px;border-radius:9px;border:1.5px solid #DAD3C4;font-size:13px;font-family:inherit;resize:vertical;}
+
   .footer-tools{margin-top:34px;text-align:center;}
   .footer-tools button{background:none;border:none;color:var(--ink-soft);font-size:12.5px;text-decoration:underline;cursor:pointer;padding:6px;}
 
@@ -1174,6 +1200,53 @@ async function addKnownValue(key, value){
   }
 }
 
+/* ---------- Base de conhecimento: procedimentos de recolha por parâmetro ---------- */
+const DEFAULT_KB = {
+  'cloretos': { label: 'Cloretos', texto: 'Frasco de plástico, sem preservante. Enxaguar 2-3 vezes com a água a amostrar antes de encher.' },
+  'ph': { label: 'pH', texto: 'Analisar o mais rápido possível, de preferência no local. Encher o frasco até ao topo, sem ar.' },
+  'oxigénio dissolvido': { label: 'Oxigénio Dissolvido (OD)', texto: 'Frasco de vidro (Winkler). Encher sem turbulência nem bolhas de ar; selar e fixar de imediato.' },
+  'od': { label: 'OD', texto: 'Frasco de vidro (Winkler). Encher sem turbulência nem bolhas de ar; selar e fixar de imediato.' },
+  'microbiologia': { label: 'Microbiologia (MB)', texto: 'Frasco esterilizado — não enxaguar. Abrir só no momento da recolha; evitar tocar no gargalo/tampa.' },
+  'mb': { label: 'MB', texto: 'Frasco esterilizado — não enxaguar. Abrir só no momento da recolha; evitar tocar no gargalo/tampa.' },
+  'condutividade': { label: 'Condutividade', texto: 'Frasco de plástico, enxaguar com a água a amostrar. Sem necessidade de preservante.' },
+  'turvação': { label: 'Turvação', texto: 'Preferir frasco opaco/âmbar, evitar exposição prolongada à luz. Encher sem agitar.' },
+  'cqo': { label: 'CQO', texto: 'Frasco de vidro; pode precisar de preservante ácido (confirmar protocolo do laboratório). Refrigerar.' },
+  'cbo5': { label: 'CBO5', texto: 'Frasco de vidro, encher sem bolhas de ar. Refrigerar e enviar o mais rápido possível (análise em 24h).' },
+  'nitratos': { label: 'Nitratos', texto: 'Frasco de plástico; pode necessitar de refrigeração/congelação conforme protocolo do laboratório.' },
+  'nitritos': { label: 'Nitritos', texto: 'Frasco de plástico; pode necessitar de refrigeração conforme protocolo do laboratório.' },
+  'metais': { label: 'Metais', texto: 'Frasco de plástico pré-acidificado (confirmar com o laboratório). Evitar contacto com metais durante a recolha.' },
+  'salinidade': { label: 'Salinidade', texto: 'Frasco de vidro ou plástico, encher completamente, sem ar.' },
+  'sst': { label: 'SST (Sólidos Suspensos Totais)', texto: 'Frasco de plástico; evitar agitação excessiva antes da análise.' }
+};
+
+async function loadKnowledgeBase(){
+  let kb = await safeGet('procedimentos-frascos');
+  if(!kb){
+    kb = { ...DEFAULT_KB };
+    await safeSet('procedimentos-frascos', kb);
+  }
+  return kb;
+}
+async function saveKnowledgeBaseEntry(label, texto){
+  const kb = await loadKnowledgeBase();
+  const key = label.trim().toLowerCase();
+  if(!key) return kb;
+  kb[key] = { label: label.trim(), texto: texto.trim() };
+  await safeSet('procedimentos-frascos', kb);
+  return kb;
+}
+async function deleteKnowledgeBaseEntry(key){
+  const kb = await loadKnowledgeBase();
+  delete kb[key];
+  await safeSet('procedimentos-frascos', kb);
+  return kb;
+}
+function lookupProcedure(kb, paramValue){
+  const key = (paramValue || '').trim().toLowerCase();
+  if(!key) return null;
+  return kb[key] || null;
+}
+
 async function startAddFrasco(locId, skipCamera){
   const frascos = await loadFrascos(locId);
   const suggestedNumero = suggestNumero(frascos);
@@ -1181,6 +1254,7 @@ async function startAddFrasco(locId, skipCamera){
   const suggestedAmostra = frascos.length ? (frascos[frascos.length-1].amostra || '') : '';
   const params = await loadKnownList('known-params');
   const destinos = await loadKnownList('known-destinos');
+  const kb = await loadKnowledgeBase();
 
   let extracted = null;
   let ocrAttempted = false;
@@ -1208,7 +1282,7 @@ async function startAddFrasco(locId, skipCamera){
     suggestedDestino: (extracted && extracted.destino) || suggestedDestino,
     suggestedAmostra: (extracted && extracted.amostra) || suggestedAmostra,
     suggestedParam: (extracted && extracted.frasco) || '',
-    params, destinos,
+    params, destinos, kb,
     ocrAttempted, ocrFailed: ocrAttempted && !extracted, ocrEngine
   });
 }
@@ -1339,12 +1413,13 @@ function wireChipRow(root, containerId, inputEl){
     chip.addEventListener('click', ()=>{
       inputEl.value = chip.dataset.value;
       inputEl.focus();
+      inputEl.dispatchEvent(new Event('input'));
     });
   });
 }
 
 function showFrascoSheet(locId, opts){
-  const { suggestedNumero, suggestedDestino, suggestedAmostra, suggestedParam, params, destinos, ocrAttempted, ocrFailed, ocrEngine } = opts;
+  const { suggestedNumero, suggestedDestino, suggestedAmostra, suggestedParam, params, destinos, kb, ocrAttempted, ocrFailed, ocrEngine } = opts;
   const backdrop = document.createElement('div');
   backdrop.className = 'sheet-backdrop';
   backdrop.innerHTML = `
@@ -1363,6 +1438,7 @@ function showFrascoSheet(locId, opts){
       <label class="field-label" style="margin-top:0;">Frasco (parâmetro a analisar)</label>
       ${chipsRow('paramChips', params)}
       <input type="text" id="frascoParam" placeholder="Ex.: Cloretos, pH, Metais..." value="${esc(suggestedParam || '')}">
+      <div id="procNote"></div>
 
       <label class="field-label">Nº</label>
       <input type="text" id="frascoNumero" value="${esc(suggestedNumero)}">
@@ -1386,6 +1462,37 @@ function showFrascoSheet(locId, opts){
 
   wireChipRow(backdrop, 'paramChips', paramInput);
   wireChipRow(backdrop, 'destinoChips', destinoInput);
+
+  function updateProcNote(){
+    const box = backdrop.querySelector('#procNote');
+    const value = paramInput.value.trim();
+    if(!value){ box.innerHTML = ''; return; }
+    const found = lookupProcedure(kb, value);
+    if(found){
+      box.innerHTML = `<div class="proc-note">📋 <strong>${esc(found.label)}:</strong> ${esc(found.texto)}</div>`;
+    } else {
+      box.innerHTML = `
+        <div class="proc-note proc-note-add" id="procNoteAdd">
+          Sem procedimento guardado para "<em>${esc(value)}</em>".
+          <button type="button" id="addProcBtn">+ Adicionar procedimento</button>
+        </div>`;
+      backdrop.querySelector('#addProcBtn').addEventListener('click', ()=>{
+        const addBox = backdrop.querySelector('#procNoteAdd');
+        addBox.innerHTML = `
+          <textarea id="procTextarea" rows="2" placeholder="Procedimento breve de recolha para «${esc(value)}»..."></textarea>
+          <button type="button" class="ocr-retry" id="saveProcBtn">Guardar procedimento</button>`;
+        backdrop.querySelector('#procTextarea').focus();
+        backdrop.querySelector('#saveProcBtn').addEventListener('click', async ()=>{
+          const texto = backdrop.querySelector('#procTextarea').value.trim();
+          if(!texto) return;
+          Object.assign(kb, await saveKnowledgeBaseEntry(value, texto));
+          updateProcNote();
+        });
+      });
+    }
+  }
+  paramInput.addEventListener('input', updateProcNote);
+  updateProcNote();
 
   setTimeout(()=>{ paramInput.focus(); }, 50);
 
@@ -1412,7 +1519,7 @@ function showFrascoSheet(locId, opts){
         suggestedDestino: (extracted && extracted.destino) || destinoInput.value,
         suggestedAmostra: (extracted && extracted.amostra) || amostraInput.value,
         suggestedParam: (extracted && extracted.frasco) || paramInput.value,
-        params, destinos, ocrAttempted: true, ocrFailed: !extracted, ocrEngine
+        params, destinos, kb, ocrAttempted: true, ocrFailed: !extracted, ocrEngine
       });
     });
   }
@@ -1447,7 +1554,7 @@ async function resetAllData(){
 }
 
 /* ---------- Settings ---------- */
-function renderSettings(){
+async function renderSettings(){
   view = 'settings';
   removeAddFrascoBar();
   backBtn.style.visibility = 'visible';
@@ -1456,6 +1563,8 @@ function renderSettings(){
   ensureFab();
 
   const currentKey = getApiKey();
+  const kb = await loadKnowledgeBase();
+  const kbEntries = Object.entries(kb).sort((a,b) => a[1].label.localeCompare(b[1].label, 'pt'));
 
   app.innerHTML = `
     <label class="field-label" style="margin-top:0;">Cópia de segurança</label>
@@ -1482,7 +1591,70 @@ function renderSettings(){
     </p>
     <button class="btn-primary" id="saveKeyBtn">Guardar chave</button>
     ${currentKey ? `<button class="btn-secondary" id="clearKeyBtn">Remover chave guardada</button>` : ''}
+
+    <label class="field-label">Base de conhecimento — procedimentos de recolha</label>
+    <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin-top:0;">
+      Notas breves por parâmetro (frasco), mostradas automaticamente ao criar um frasco.
+      Vêm com alguns exemplos comuns já incluídos — <strong>confirma sempre com o protocolo do teu
+      laboratório</strong>, e ajusta o texto livremente aqui.
+    </p>
+    <div id="kbList">
+      ${kbEntries.map(([key, entry]) => `
+        <div class="kb-row" data-key="${esc(key)}">
+          <div class="kb-row-head">
+            <input type="text" class="kb-label" value="${esc(entry.label)}" placeholder="Nome do parâmetro">
+            <button type="button" class="kb-del" data-key="${esc(key)}">✕</button>
+          </div>
+          <textarea class="kb-texto" rows="2">${esc(entry.texto)}</textarea>
+          <button type="button" class="btn-secondary kb-save" data-key="${esc(key)}" style="padding:7px 0;font-size:12.5px;">Guardar alterações</button>
+        </div>
+      `).join('')}
+    </div>
+    <button class="btn-secondary" id="addKbBtn" style="padding:9px 0;">+ Novo parâmetro</button>
   `;
+
+  document.getElementById('kbList').querySelectorAll('.kb-save').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const row = btn.closest('.kb-row');
+      const oldKey = row.dataset.key;
+      const newLabel = row.querySelector('.kb-label').value.trim();
+      const texto = row.querySelector('.kb-texto').value.trim();
+      if(!newLabel) return;
+      if(oldKey && oldKey !== newLabel.toLowerCase()) await deleteKnowledgeBaseEntry(oldKey);
+      await saveKnowledgeBaseEntry(newLabel, texto);
+      renderSettings();
+    });
+  });
+  document.getElementById('kbList').querySelectorAll('.kb-del').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      if(!confirm('Eliminar este procedimento?')) return;
+      await deleteKnowledgeBaseEntry(btn.dataset.key);
+      renderSettings();
+    });
+  });
+  document.getElementById('addKbBtn').addEventListener('click', ()=>{
+    const list = document.getElementById('kbList');
+    const row = document.createElement('div');
+    row.className = 'kb-row';
+    row.dataset.key = '';
+    row.innerHTML = `
+      <div class="kb-row-head">
+        <input type="text" class="kb-label" placeholder="Nome do parâmetro (ex.: Amónia)">
+        <button type="button" class="kb-del-new">✕</button>
+      </div>
+      <textarea class="kb-texto" rows="2" placeholder="Procedimento breve de recolha..."></textarea>
+      <button type="button" class="btn-secondary kb-save-new" style="padding:7px 0;font-size:12.5px;">Guardar</button>`;
+    list.appendChild(row);
+    row.querySelector('.kb-label').focus();
+    row.querySelector('.kb-del-new').addEventListener('click', ()=> row.remove());
+    row.querySelector('.kb-save-new').addEventListener('click', async ()=>{
+      const label = row.querySelector('.kb-label').value.trim();
+      const texto = row.querySelector('.kb-texto').value.trim();
+      if(!label) return;
+      await saveKnowledgeBaseEntry(label, texto);
+      renderSettings();
+    });
+  });
 
   document.getElementById('exportBtn').addEventListener('click', shareBackup);
   document.getElementById('importBtn').addEventListener('click', ()=>{
